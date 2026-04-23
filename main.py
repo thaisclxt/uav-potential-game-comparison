@@ -1,30 +1,33 @@
 import math
 import random
 from dataclasses import dataclass, field
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Union
 
 # ============================================================
 # Configuration
 # ============================================================
 
-GRID_WIDTH = 13
-GRID_HEIGHT = 13
-GRID_SPACING = 5
-DEPOT_INDEX = 0
+GRID_WIDTH = 3
+GRID_HEIGHT = 3
+GRID_SPACING = 1
+DEPOT_LOCATION = (0, 0)
 
-NUM_TARGETS = 22
+NUM_TARGETS = 5
 
-UAVS = [3, 4, 5, 6, 7, 8, 9, 10]
+USE_FIXED_TARGETS = True
+FIXED_TARGET_INDICES = [2, 3, 5, 6, 7]
+
+UAVS = [1, 2]
 
 UAV_SPEED = 10
-MAX_FLIGHT_TIME = 30
+MAX_FLIGHT_TIME = 2
 
 BASE_REVENUE = 30
 MIN_WP_REVENUE = 60
 MAX_WP_REVENUE = 600
 
 NUM_SIMULATION_RUNS = 100
-BASE_SEED = 42
+BASE_SEED = 32
 
 # ============================================================
 # Data models
@@ -34,13 +37,19 @@ BASE_SEED = 42
 class Waypoint:
     x: float
     y: float
+    wid: int
     revenue: float = BASE_REVENUE
 
 @dataclass
+class Depot:
+    x: float = DEPOT_LOCATION[0]
+    y: float = DEPOT_LOCATION[1]
+
+@dataclass
 class UAV:
-    uav_id: int
-    sequence: List[int] = field(default_factory=list)  # S_j
-    m_j: int = 0                                       # number of repetitions
+    uid: int
+    sequence: List[Waypoint] = field(default_factory=list)  # S_j
+    m_j: int = 0                                            # number of repetitions
 
     def reset(self) -> None:
         self.sequence.clear()
@@ -56,43 +65,63 @@ class GridEnvironment:
             random.seed(seed)
 
         self.waypoints: List[Waypoint] = self._build_grid()
-        self.depot: Waypoint = self.waypoints[DEPOT_INDEX]
-        self.target_waypoints: List[int] = self._select_random_targets()
+        self.depot: Depot = Depot()
+        self.target_waypoints: List[Waypoint] = self._select_random_targets()
+
+    def print_summary(self) -> None:
+        print(f"Depot at: ({self.depot.x}, {self.depot.y})\n")
+
+        for wp in sorted(self.waypoints, key=lambda w: w.wid):
+            print(f"Waypoint {wp.wid}: ({wp.x}, {wp.y})")
+
+        print(f"\nTotal waypoints: {len(self.waypoints)}")
+        print(f"Number of targets: {len(self.target_waypoints)}\n")
+
+        for wp in sorted(self.target_waypoints, key=lambda w: w.wid):
+            print(f"Waypoint target {wp.wid}: ({wp.x}, {wp.y}) with revenue {wp.revenue:.2f}")
 
     def _build_grid(self) -> List[Waypoint]:
         waypoints = []
-        for x in range(0, GRID_WIDTH):
-            for y in range(0, GRID_HEIGHT):
-                wp = Waypoint(x * GRID_SPACING, y * GRID_SPACING)
-                waypoints.append(wp)
-                print(f"Waypoint {len(waypoints)-1}: ({wp.x}, {wp.y}) with base revenue {wp.revenue}")
+        wid = 0
+        for i in range(GRID_WIDTH):
+            for j in range(GRID_HEIGHT):
+                if (i, j) == DEPOT_LOCATION:
+                    continue
+                x = j * GRID_SPACING
+                y = i * GRID_SPACING
+                waypoints.append(Waypoint(x=x, y=y, wid=wid))
+                wid += 1
         return waypoints
 
-    def _select_random_targets(self) -> List[int]:
-        candidate_indices = [i for i in range(len(self.waypoints)) if i != DEPOT_INDEX]
+    def _select_random_targets(self) -> List[Waypoint]:
+        # Only for testing: use fixed target indices instead of random sampling
+        if USE_FIXED_TARGETS:
+            target_indices = FIXED_TARGET_INDICES
+            return [self.waypoints[i] for i in target_indices]
+
         # Ensure NUM_TARGETS is feasible
-        if NUM_TARGETS > len(candidate_indices):
-            raise ValueError(
-                f"NUM_TARGETS={NUM_TARGETS} exceeds available non-depot waypoints={len(candidate_indices)}"
-            )
-        return random.sample(candidate_indices, NUM_TARGETS)
+        if NUM_TARGETS > len(self.waypoints):
+            raise ValueError(f"NUM_TARGETS ({NUM_TARGETS}) exceeds available waypoints ({len(self.waypoints)}).")
+        return random.sample(self.waypoints, NUM_TARGETS)
+    
+
 
     def assign_random_revenues(self) -> None:
         """
         Assign random revenues to the already-selected targets.
         """
-        for idx in self.target_waypoints:
-            self.waypoints[idx].revenue = random.uniform(MIN_WP_REVENUE, MAX_WP_REVENUE)
+        for wp in self.target_waypoints:
+            wp.revenue = random.uniform(MIN_WP_REVENUE, MAX_WP_REVENUE)
 
 # ============================================================
 # Utility functions
 # ============================================================
 
-def euclidean_distance(wp_a: Waypoint, wp_b: Waypoint) -> float:
-    return math.hypot(wp_b.x - wp_a.x, wp_b.y - wp_a.y)
+def euclidean_distance(a: Waypoint | Depot, b: Waypoint | Depot) -> float:
+    return math.hypot(b.x - a.x, b.y - a.y)
 
-def travel_time(wp_a: Waypoint, wp_b: Waypoint) -> float:
-    distance = euclidean_distance(wp_a, wp_b)
+def travel_time(a: Waypoint | Depot, b: Waypoint | Depot) -> float:
+    distance = euclidean_distance(a, b)
     return distance / UAV_SPEED
 
 # ============================================================
@@ -103,30 +132,11 @@ class GreedyAllocator:
     def __init__(self, environment: GridEnvironment, num_uavs: int):
         self.environment = environment
         self.num_uavs = num_uavs
-        self.uavs = [UAV(uav_id=i + 1) for i in range(self.num_uavs)]
+        self.uavs = [UAV(uid=i + 1) for i in range(self.num_uavs)]
 
     # ---------- Time and tour helpers ----------
 
-    def compute_sequence_flight_time(self, sequence: List[int]) -> float:
-        """
-        Time for a single tour: depot -> sequence once -> depot.
-        """
-        if not sequence:
-            return 0.0
-
-        depot = self.environment.depot
-        waypoints = self.environment.waypoints
-
-        total = travel_time(depot, waypoints[sequence[0]])
-
-        for a, b in zip(sequence[:-1], sequence[1:]):
-            total += travel_time(waypoints[a], waypoints[b])
-
-        total += travel_time(waypoints[sequence[-1]], depot)
-
-        return total
-
-    def compute_tour_flight_time(self, sequence: List[int], m_j: int) -> float:
+    def compute_tour_flight_time(self, sequence: List[Waypoint], m_j: int) -> float:
         """
         Time for tour = [depot] + sequence repeated m_j times + [depot].
         """
@@ -134,68 +144,69 @@ class GreedyAllocator:
             return 0.0
 
         depot = self.environment.depot
-        waypoints = self.environment.waypoints
 
-        total = 0.0
+        first_wp = sequence[0]
+        last_wp = sequence[-1]
 
-        # depot -> first waypoint of first repetition
-        total += travel_time(depot, waypoints[sequence[0]])
+        # depot -> first waypoint
+        total = travel_time(depot, first_wp)
 
-        # within and between repetitions
         for rep in range(m_j):
-            for a, b in zip(sequence[:-1], sequence[1:]):
-                total += travel_time(waypoints[a], waypoints[b])
+            # within sequence
+            for wp_a, wp_b in zip(sequence[:-1], sequence[1:]):
+                total += travel_time(wp_a, wp_b)
 
             # between repetitions (last of rep -> first of next rep)
             if rep < m_j - 1:
-                total += travel_time(waypoints[sequence[-1]], waypoints[sequence[0]])
+                total += travel_time(last_wp, first_wp)
 
         # last waypoint -> depot
-        total += travel_time(waypoints[sequence[-1]], depot)
+        total += travel_time(last_wp, depot)
 
         return total
 
-    def compute_m_j(self, sequence: List[int]) -> int:
+    def compute_m_j(self, sequence: List[Waypoint]) -> int:
         """
-        Largest m_j such that tour flight time <= MAX_FLIGHT_TIME.
-        Uses C0 + m*C1 <= MAX_FLIGHT_TIME.
+        Compute the maximum m_j such that the tour time does not exceed MAX_FLIGHT_TIME.
         """
         if not sequence:
             return 0
 
         depot = self.environment.depot
-        waypoints = self.environment.waypoints
 
-        first = sequence[0]
-        last = sequence[-1]
+        first_wp = sequence[0]
+        last_wp = sequence[-1]
 
-        # One-time legs depot -> first + last -> depot
-        C0 = travel_time(depot, waypoints[first]) + travel_time(waypoints[last], depot)
+        depot_legs_time = travel_time(depot, first_wp) + travel_time(last_wp, depot)
 
-        # Per-cycle time within the sequence + last -> first
-        C1 = 0.0
-        for a, b in zip(sequence[:-1], sequence[1:]):
-            C1 += travel_time(waypoints[a], waypoints[b])
-        C1 += travel_time(waypoints[last], waypoints[first])
+        internal_sequence_time = 0.0
+        for wp_a, wp_b in zip(sequence[:-1], sequence[1:]):
+            internal_sequence_time += travel_time(wp_a, wp_b)
+        
+        # Time to close the cycle (last waypoint back to first)
+        internal_sequence_time += travel_time(last_wp, first_wp)
 
-        # If just depot->first + last->depot already too big, no repetitions
-        if C0 > MAX_FLIGHT_TIME:
+        # If just depot->first + last->depot already exceeds max time, no repetitions are possible
+        if depot_legs_time > MAX_FLIGHT_TIME:
             return 0
-
-        # Degenerate case
-        if C1 == 0.0:
+        
+        if internal_sequence_time == 0.0:
             return 1
 
-        m_max = int((MAX_FLIGHT_TIME - C0) // C1)
-        return max(m_max, 1)
+        remaining_time = MAX_FLIGHT_TIME - depot_legs_time
 
-    def build_tour(self, uav: UAV) -> List[int]:
+        max_repetitions = int(remaining_time // internal_sequence_time)
+        return max(max_repetitions, 1)
+        
+
+    def build_tour(self, uav: UAV) -> List[Union[Depot, Waypoint]]:
         """
         Return index sequence for T_j = [depot] + S_j^m_j + [depot].
         """
         if not uav.sequence or uav.m_j <= 0:
-            return [DEPOT_INDEX, DEPOT_INDEX]
-        return [DEPOT_INDEX] + (uav.sequence * uav.m_j) + [DEPOT_INDEX]
+            # Just the depot if no waypoints assigned
+            return [self.environment.depot]
+        return [self.environment.depot] + (uav.sequence * uav.m_j) + [self.environment.depot]
 
     def current_tour_time(self, uav: UAV) -> float:
         if not uav.sequence or uav.m_j <= 0:
@@ -204,8 +215,8 @@ class GreedyAllocator:
 
     # ---------- Revenue and revenue-rate ----------
 
-    def compute_sequence_revenue(self, sequence: List[int]) -> float:
-        return sum(self.environment.waypoints[idx].revenue for idx in sequence)
+    def compute_sequence_revenue(self, sequence: List[Waypoint]) -> float:
+        return sum(wp.revenue for wp in sequence)
 
     def compute_total_revenue(self, uav: UAV) -> float:
         """
@@ -236,36 +247,31 @@ class GreedyAllocator:
         for uav in self.uavs:
             uav.reset()
 
-    def can_assign_target(self, uav: UAV, target_idx: int) -> bool:
+    def can_assign_target(self, uav: UAV, target_wp: Waypoint) -> bool:
         """
         Feasible if adding target to sequence yields m_j >= 1.
         """
-        trial_sequence = uav.sequence + [target_idx]
+        trial_sequence = uav.sequence + [target_wp]
         trial_m_j = self.compute_m_j(trial_sequence)
         return trial_m_j >= 1
 
-    def find_nearest_feasible_target(self, uav: UAV, unassigned_targets: List[int]) -> Optional[int]:
+
+    def find_nearest_feasible_target(self, uav: UAV, unassigned_targets: List[Waypoint]) -> Optional[Waypoint]:
         if not unassigned_targets:
             return None
+        
+        current_location = uav.sequence[-1] if uav.sequence else self.environment.depot
 
-        waypoints = self.environment.waypoints
-
-        current_index = uav.sequence[-1] if uav.sequence else DEPOT_INDEX
-        current_wp = waypoints[current_index]
-
-        feasible_targets = [
-            t_idx
-            for t_idx in unassigned_targets
-            if self.can_assign_target(uav, t_idx)
-        ]
+        feasible_targets = [wp for wp in unassigned_targets if self.can_assign_target(uav, wp)]
 
         if not feasible_targets:
             return None
+        
+        min_distance = min(euclidean_distance(current_location, wp) for wp in feasible_targets)
 
-        return min(
-            feasible_targets,
-            key=lambda t_idx: euclidean_distance(current_wp, waypoints[t_idx]),
-        )
+        # If multiple targets tie for nearest, pick one at random among the ties
+        candidates = [wp for wp in feasible_targets if euclidean_distance(current_location, wp) == min_distance]
+        return random.choice(candidates)
 
     def select_uav_with_min_tour_time(self) -> UAV:
         """
@@ -316,16 +322,16 @@ def print_solution(
     environment: GridEnvironment,
     allocator: GreedyAllocator,
     uavs: List[UAV],
-    unassigned_targets: List[int],
+    unassigned_targets: List[Waypoint],
     total_revenue: float,
     total_revenue_rate: float,
     header: str = "Greedy Result",
 ) -> None:
     print(f"\n=== {header} ===")
     print(f"Number of UAVs (m): {allocator.num_uavs}")
-    print(f"Selected targets: {sorted(environment.target_waypoints)}")
-    print(f"Total revenue over tours: {total_revenue:.2f}")
-    print(f"Total revenue rate (sum_j z_j): {total_revenue_rate:.4f}")
+    print(f"Selected targets: {sorted([wp.wid for wp in environment.target_waypoints])}")
+    # print(f"Total revenue over tours: {total_revenue:.2f}")
+    # print(f"Total revenue rate (sum_j z_j): {total_revenue_rate:.4f}")
 
     for uav in uavs:
         seq = uav.sequence
@@ -337,19 +343,19 @@ def print_solution(
         f_j = allocator.compute_monitoring_frequency(uav)
         z_j = allocator.compute_revenue_rate(uav)
 
-        print(f"\nUAV {uav.uav_id}")
-        print(f"  Sequence S_j: {seq if seq else 'No waypoints assigned'}")
+        print(f"\nUAV {uav.uid}")
+        print(f"  Sequence S_j: {[wp.wid for wp in seq] if seq else 'No waypoints assigned'}")
         print(f"  m_j (repetitions): {uav.m_j}")
-        print(f"  Tour T_j (indices): {tour}")
-        print(f"  Sequence revenue (one pass): {seq_revenue}")
-        print(f"  Total revenue r_j(T): {r_j:.2f}")
+        print(f"  Tour T_j (indices): {[wp.wid if isinstance(wp, Waypoint) else environment.depot for wp in tour]}")
+        # print(f"  Sequence revenue (one pass): {seq_revenue}")
+        # print(f"  Total revenue r_j(T): {r_j:.2f}")
         print(f"  Tour flight time T_j (s): {tour_time:.2f}")
         print(f"  Remaining time (s): {remaining_time:.2f}")
-        print(f"  Monitoring frequency f(T_j): {f_j:.6f}")
-        print(f"  Revenue rate z_j(T): {z_j:.6f}")
+        # print(f"  Monitoring frequency f(T_j): {f_j:.6f}")
+        # print(f"  Revenue rate z_j(T): {z_j:.6f}")
 
     if unassigned_targets:
-        print(f"\nUnassigned targets: {sorted(unassigned_targets)}")
+        print(f"\nUnassigned targets: {sorted([wp.wid for wp in unassigned_targets])}")
     else:
         print("\nAll targets were assigned to at least one UAV (m_j >= 1).")
         
@@ -365,13 +371,8 @@ def run_simulation() -> None:
     # Ask the professor: how does the 20% high risk revenue woork?
     environment.assign_random_revenues()
 
-    print("\n=== Fixed Environment Summary ===")
-    print(f"Total waypoints: {len(environment.waypoints)}")
-    print(f"Number of targets: {len(environment.target_waypoints)}\n")
-    
-    for i in sorted(environment.target_waypoints):
-        wp = environment.waypoints[i]
-        print(f"Target {i}: ({wp.x}, {wp.y}) with revenue {wp.revenue:.2f}")
+    # Print environment summary (targets and their revenues)
+    environment.print_summary()
 
     overall_best_revenue_rate = -float("inf")
     overall_best_result = None
@@ -400,14 +401,14 @@ def run_simulation() -> None:
         # Store best revenue rate for this m
         per_m_best[m] = best_total_revenue_rate_for_m
 
-        print(f"\n=== Best result for m = {m} over {NUM_SIMULATION_RUNS} runs ===")
+        # print(f"\n=== Best result for m = {m} over {NUM_SIMULATION_RUNS} runs ===")
         if best_result_for_m is None:
             print("  No feasible solution found.")
         else:
             allocator, uavs, unassigned_targets, total_revenue, total_revenue_rate = best_result_for_m
-            print(f"  Best total revenue rate: {best_total_revenue_rate_for_m:.4f}")
-            # print_solution(environment, allocator, uavs, unassigned_targets, total_revenue, total_revenue_rate,
-            #               header=f"Best Greedy Result for m = {m}")
+            # print(f"  Best total revenue rate: {best_total_revenue_rate_for_m:.4f}")
+            print_solution(environment, allocator, uavs, unassigned_targets, total_revenue, total_revenue_rate,
+                          header=f"Best Greedy Result for m = {m}")
 
             # Track overall best across all m (maximize)
             if best_total_revenue_rate_for_m > overall_best_revenue_rate:
@@ -415,26 +416,26 @@ def run_simulation() -> None:
                 overall_best_result = (m, environment, allocator, uavs, unassigned_targets,
                                        total_revenue, total_revenue_rate)
 
-    print("\n=== Overall best m (max revenue rate) ===")
-    if overall_best_result is None:
-        print("No feasible solution found for any m.")
-    else:
-        best_m, best_env, best_alloc, best_uavs, best_unassigned, best_total_revenue, best_total_revenue_rate = overall_best_result
-        print(f"Best m (number of UAVs): {best_m}")
-        print(f"Best total revenue rate: {best_total_revenue_rate:.4f}")
-        print_solution(
-            best_env,
-            best_alloc,
-            best_uavs,
-            best_unassigned,
-            best_total_revenue,
-            best_total_revenue_rate,
-            header="Overall Best Greedy Result (Max Revenue Rate)",
-        )
+    # print("\n=== Overall best m (max revenue rate) ===")
+    # if overall_best_result is None:
+    #     print("No feasible solution found for any m.")
+    # else:
+    #     best_m, best_env, best_alloc, best_uavs, best_unassigned, best_total_revenue, best_total_revenue_rate = overall_best_result
+    #     print(f"Best m (number of UAVs): {best_m}")
+    #     print(f"Best total revenue rate: {best_total_revenue_rate:.4f}")
+    #     print_solution(
+    #         best_env,
+    #         best_alloc,
+    #         best_uavs,
+    #         best_unassigned,
+    #         best_total_revenue,
+    #         best_total_revenue_rate,
+    #         header="Overall Best Greedy Result (Max Revenue Rate)",
+    #     )
 
-    print("\n=== Summary: best revenue rate per m ===")
-    for m in sorted(per_m_best.keys()):
-        print(f"m = {m}: best revenue rate = {per_m_best[m]:.4f}")
+    # print("\n=== Summary: best revenue rate per m ===")
+    # for m in sorted(per_m_best.keys()):
+    #     print(f"m = {m}: best revenue rate = {per_m_best[m]:.4f}")
 
 if __name__ == "__main__":
     run_simulation()
