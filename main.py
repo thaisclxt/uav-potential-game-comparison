@@ -1,422 +1,440 @@
-import random, math
+import math
+import random
+from dataclasses import dataclass, field
+from typing import List, Tuple, Optional
 
-GRID_SIZE = 13
-WAYPOINT_SPACING = 50.0
+# ============================================================
+# Configuration
+# ============================================================
 
-TOTAL_TARGETS = 21
-M_MAX = 6                  # Maximum number of UAVs considered in Algorithm 1 (M)
+GRID_WIDTH = 13
+GRID_HEIGHT = 13
+GRID_SPACING = 5
+DEPOT_INDEX = 0
 
-UAV_SPEED = 10.0           # Velocity V (distance units per second)
-MAX_FLIGHT_TIME = 1800.0   # Maximum flight time Tf_max(k) (seconds) for all UAVs
+NUM_TARGETS = 22
 
-O_OPERATORS = 3            # Number of UAV operators O (for waiting time model)
-TP_PREP = 300.0            # Preparation time Tp (seconds) for one UAV
+UAVS = [3, 4, 5, 6, 7, 8, 9, 10]
 
-MIN_WP_REVENUE = 60.0      # Minimum revenue for a target waypoint
-MAX_WP_REVENUE = 600.0     # Maximum revenue for a target waypoint
+UAV_SPEED = 10
+MAX_FLIGHT_TIME = 30
 
+BASE_REVENUE = 30
+MIN_WP_REVENUE = 60
+MAX_WP_REVENUE = 600
 
+NUM_SIMULATION_RUNS = 100
+BASE_SEED = 42
+
+# ============================================================
+# Data models
+# ============================================================
+
+@dataclass
 class Waypoint:
-    """
-    Node in the 2D grid.
+    x: float
+    y: float
+    revenue: float = BASE_REVENUE
 
-    Attributes:
-        id (int): unique waypoint index.
-        x, y (float): coordinates in 2D plane.
-        revenue (float): revenue gained if this waypoint is visited
-                         (used only for target waypoints, depot has 0).
-    """
-    def __init__(self, wid, x, y):
-        self.id = wid
-        self.x = x
-        self.y = y
-        self.revenue = 0.0
-
-    def update_revenue(self):
-        """
-        Assign a random revenue value to this waypoint within the global range.
-        """
-        self.revenue = random.uniform(MIN_WP_REVENUE, MAX_WP_REVENUE)
-
-
+@dataclass
 class UAV:
-    """
-    UAV model.
+    uav_id: int
+    sequence: List[int] = field(default_factory=list)  # S_j
+    m_j: int = 0                                       # number of repetitions
 
-    Attributes:
-        id (int): UAV index (1..m).
-        route (list[Waypoint]): ordered list of waypoints visited by this UAV.
-                                The first waypoint is always the depot P0.
-    """
-    def __init__(self, uid, start_wp):
-        self.id = uid
-        self.route = [start_wp]
+    def reset(self) -> None:
+        self.sequence.clear()
+        self.m_j = 0
 
+# ============================================================
+# Environment
+# ============================================================
 
-def build_grid():
-    """
-    Build a GRID_SIZE x GRID_SIZE grid of waypoints spaced by WAYPOINT_SPACING.
+class GridEnvironment:
+    def __init__(self, seed: Optional[int] = None):
+        if seed is not None:
+            random.seed(seed)
 
-    Returns:
-        list[Waypoint]: all waypoints, indexed by their id (0..N-1).
-                        Waypoint 0 is used as the depot P0.
-    """
-    waypoints = []
-    wid = 0
-    for i in range(GRID_SIZE):
-        for j in range(GRID_SIZE):
-            x = i * WAYPOINT_SPACING
-            y = j * WAYPOINT_SPACING
-            waypoints.append(Waypoint(wid, x, y))
-            wid += 1
-    return waypoints
+        self.waypoints: List[Waypoint] = self._build_grid()
+        self.depot: Waypoint = self.waypoints[DEPOT_INDEX]
+        self.target_waypoints: List[int] = self._select_random_targets()
 
+    def _build_grid(self) -> List[Waypoint]:
+        waypoints = []
+        for x in range(0, GRID_WIDTH):
+            for y in range(0, GRID_HEIGHT):
+                wp = Waypoint(x * GRID_SPACING, y * GRID_SPACING)
+                waypoints.append(wp)
+                print(f"Waypoint {len(waypoints)-1}: ({wp.x}, {wp.y}) with base revenue {wp.revenue}")
+        return waypoints
 
-def distance(wp1, wp2):
-    """
-    Euclidean distance between two waypoints.
-    """
-    dx = wp1.x - wp2.x
-    dy = wp1.y - wp2.y
-    return math.hypot(dx, dy)
-
-
-def travel_time(wp1, wp2):
-    """
-    Flight time between two waypoints
-    based on constant speed UAV_SPEED.
-    """
-    return distance(wp1, wp2) / UAV_SPEED
-
-
-def flight_time(route):
-    """
-    Compute T_f(k): flight time of a UAV along its current route.
-
-    It is the sum of travel_time over all consecutive waypoint pairs
-    in the route. This corresponds to the flight time definition in
-    the paper (Definition 2) but omits the turning-angle part.
-
-    Args:
-        route (list[Waypoint]): current path of a UAV.
-
-    Returns:
-        float: total flight time along the route.
-    """
-    t = 0.0
-    for i in range(len(route) - 1):
-        t += travel_time(route[i], route[i+1])
-    return t
-
-
-def waiting_time(k):
-    """
-    Compute T_w(k): waiting time before takeoff for the k-th UAV.
-
-    Assumptions (from Definition 1):
-    - There are O operators.
-    - Each UAV requires Tp seconds of preparation.
-    - Up to O UAVs can be prepared in parallel in each "batch".
-
-    Example: O=2, Tp=5 min
-      U1,U2 wait 5 min, U3,U4 wait 10 min, U5,U6 wait 15 min, ...
-
-    Args:
-        k (int): UAV index (1-based).
-        Tp (float): preparation time for one UAV.
-        O (int): number of operators.
-
-    Returns:
-        float: waiting time for the k-th UAV.
-    """
-    # How many preparation batches have been completed before UAV k?
-    batch_index = (k - 1) // O_OPERATORS
-    return (batch_index + 1) * TP_PREP
-
-
-def cumulative_time(uav):
-    """
-    Compute T_c(k) = T_w(k) + T_f(k): cumulative time of UAV k.
-
-    This is used in the greedy allocation to pick the UAV with
-    the smallest current load (shortest cumulative time).
-
-    Args:
-        uav (UAV): UAV whose cumulative time is computed.
-        Tp (float): preparation time per UAV.
-        O (int): number of operators.
-
-    Returns:
-        float: cumulative time for this UAV.
-    """
-    k = uav.id
-    Twk = waiting_time(k)
-    Tf_k = flight_time(uav.route)
-    return Twk + Tf_k
-
-
-def revenue_function(uavs):
-    """
-    Compute total revenue of a given assignment (set of UAV routes).
-
-    Revenue of a route is defined as the sum of revenues of all target
-    waypoints visited by that UAV. The depot P0 (waypoint 0) is excluded.
-
-    Args:
-        uavs (list[UAV]): UAVs with completed routes.
-
-    Returns:
-        float: total revenue over all UAVs.
-    """
-    total_rev = 0.0
-    for uav in uavs:
-        # Skip the first waypoint (depot) in each route
-        for wp in uav.route[1:]:
-            total_rev += wp.revenue
-    return total_rev
-
-
-def find_Mmin(waypoints, target_indices):
-    """
-    Phase 1 of Algorithm 1: find the minimal number of UAVs Mmin
-    that can cover all targets under the flight time constraint.
-
-    Logic (adapted from Algorithm 1, steps 2–15):
-      - Start with k = 1.
-      - For UAV Uk, repeatedly assign it the nearest feasible target Pc
-        (feasible means adding Pc keeps Tf(k) <= Tfmax(k)).
-      - When Uk cannot take any more targets, move to UAV U(k+1).
-      - Stop when all targets are assigned or k > M.
-      - The resulting k is taken as Mmin.
-
-    Args:
-        waypoints (list[Waypoint]): full grid of waypoints (including depot).
-        target_indices (list[int]): indices of target waypoints to be covered.
-        M (int): maximum number of UAVs available.
-        Tfmax_value (float): maximum flight time allowed for each UAV.
-
-    Returns:
-        tuple:
-            Mmin (int): minimal number of UAVs needed to cover all targets.
-            uavs_Mmin (list[UAV]): UAV objects with their routes from Phase 1.
-    """
-    depot = waypoints[0]
-    # Create M UAVs at the depot; we will use only UAVs 1..k
-    uavs = [UAV(uid=i+1, start_wp=depot) for i in range(M_MAX)]
-
-    remaining = set(target_indices)
-    k = 1  # current UAV index (1-based)
-
-    while remaining and k <= M_MAX:
-        uk = uavs[k-1]              # UAV Uk
-        last_wp = uk.route[-1]
-
-        # Find all targets that Uk can still reach without exceeding Tfmax
-        feasible = []
-        Tf_k = flight_time(uk.route)
-        for idx in remaining:
-            wp = waypoints[idx]
-            extra_out = travel_time(last_wp, wp)
-            extra_back = travel_time(wp, depot)
-            if Tf_k + extra_out + extra_back <= MAX_FLIGHT_TIME:
-                feasible.append(idx)
-
-        if feasible:
-            # Among feasible targets, choose the nearest one to Uk
-            closest_idx = min(
-                feasible,
-                key=lambda i: distance(last_wp, waypoints[i])
+    def _select_random_targets(self) -> List[int]:
+        candidate_indices = [i for i in range(len(self.waypoints)) if i != DEPOT_INDEX]
+        # Ensure NUM_TARGETS is feasible
+        if NUM_TARGETS > len(candidate_indices):
+            raise ValueError(
+                f"NUM_TARGETS={NUM_TARGETS} exceeds available non-depot waypoints={len(candidate_indices)}"
             )
-            closest_wp = waypoints[closest_idx]
-            # Assign this target Pc to Uk and update its route
-            uk.route.append(closest_wp)
-            remaining.remove(closest_idx)
+        return random.sample(candidate_indices, NUM_TARGETS)
+
+    def assign_random_revenues(self) -> None:
+        """
+        Assign random revenues to the already-selected targets.
+        """
+        for idx in self.target_waypoints:
+            self.waypoints[idx].revenue = random.uniform(MIN_WP_REVENUE, MAX_WP_REVENUE)
+
+# ============================================================
+# Utility functions
+# ============================================================
+
+def euclidean_distance(wp_a: Waypoint, wp_b: Waypoint) -> float:
+    return math.hypot(wp_b.x - wp_a.x, wp_b.y - wp_a.y)
+
+def travel_time(wp_a: Waypoint, wp_b: Waypoint) -> float:
+    distance = euclidean_distance(wp_a, wp_b)
+    return distance / UAV_SPEED
+
+# ============================================================
+# Greedy allocator
+# ============================================================
+
+class GreedyAllocator:
+    def __init__(self, environment: GridEnvironment, num_uavs: int):
+        self.environment = environment
+        self.num_uavs = num_uavs
+        self.uavs = [UAV(uav_id=i + 1) for i in range(self.num_uavs)]
+
+    # ---------- Time and tour helpers ----------
+
+    def compute_sequence_flight_time(self, sequence: List[int]) -> float:
+        """
+        Time for a single tour: depot -> sequence once -> depot.
+        """
+        if not sequence:
+            return 0.0
+
+        depot = self.environment.depot
+        waypoints = self.environment.waypoints
+
+        total = travel_time(depot, waypoints[sequence[0]])
+
+        for a, b in zip(sequence[:-1], sequence[1:]):
+            total += travel_time(waypoints[a], waypoints[b])
+
+        total += travel_time(waypoints[sequence[-1]], depot)
+
+        return total
+
+    def compute_tour_flight_time(self, sequence: List[int], m_j: int) -> float:
+        """
+        Time for tour = [depot] + sequence repeated m_j times + [depot].
+        """
+        if not sequence or m_j <= 0:
+            return 0.0
+
+        depot = self.environment.depot
+        waypoints = self.environment.waypoints
+
+        total = 0.0
+
+        # depot -> first waypoint of first repetition
+        total += travel_time(depot, waypoints[sequence[0]])
+
+        # within and between repetitions
+        for rep in range(m_j):
+            for a, b in zip(sequence[:-1], sequence[1:]):
+                total += travel_time(waypoints[a], waypoints[b])
+
+            # between repetitions (last of rep -> first of next rep)
+            if rep < m_j - 1:
+                total += travel_time(waypoints[sequence[-1]], waypoints[sequence[0]])
+
+        # last waypoint -> depot
+        total += travel_time(waypoints[sequence[-1]], depot)
+
+        return total
+
+    def compute_m_j(self, sequence: List[int]) -> int:
+        """
+        Largest m_j such that tour flight time <= MAX_FLIGHT_TIME.
+        Uses C0 + m*C1 <= MAX_FLIGHT_TIME.
+        """
+        if not sequence:
+            return 0
+
+        depot = self.environment.depot
+        waypoints = self.environment.waypoints
+
+        first = sequence[0]
+        last = sequence[-1]
+
+        # One-time legs depot -> first + last -> depot
+        C0 = travel_time(depot, waypoints[first]) + travel_time(waypoints[last], depot)
+
+        # Per-cycle time within the sequence + last -> first
+        C1 = 0.0
+        for a, b in zip(sequence[:-1], sequence[1:]):
+            C1 += travel_time(waypoints[a], waypoints[b])
+        C1 += travel_time(waypoints[last], waypoints[first])
+
+        # If just depot->first + last->depot already too big, no repetitions
+        if C0 > MAX_FLIGHT_TIME:
+            return 0
+
+        # Degenerate case
+        if C1 == 0.0:
+            return 1
+
+        m_max = int((MAX_FLIGHT_TIME - C0) // C1)
+        return max(m_max, 1)
+
+    def build_tour(self, uav: UAV) -> List[int]:
+        """
+        Return index sequence for T_j = [depot] + S_j^m_j + [depot].
+        """
+        if not uav.sequence or uav.m_j <= 0:
+            return [DEPOT_INDEX, DEPOT_INDEX]
+        return [DEPOT_INDEX] + (uav.sequence * uav.m_j) + [DEPOT_INDEX]
+
+    def current_tour_time(self, uav: UAV) -> float:
+        if not uav.sequence or uav.m_j <= 0:
+            return 0.0
+        return self.compute_tour_flight_time(uav.sequence, uav.m_j)
+
+    # ---------- Revenue and revenue-rate ----------
+
+    def compute_sequence_revenue(self, sequence: List[int]) -> float:
+        return sum(self.environment.waypoints[idx].revenue for idx in sequence)
+
+    def compute_total_revenue(self, uav: UAV) -> float:
+        """
+        r_j(T) = m_j * sum_{w in S_j} revenue_w
+        """
+        if not uav.sequence or uav.m_j <= 0:
+            return 0.0
+        return uav.m_j * self.compute_sequence_revenue(uav.sequence)
+
+    def compute_monitoring_frequency(self, uav: UAV) -> float:
+        """
+        f(T_j) ~ m_j * v / T_j
+        """
+        t_j = self.current_tour_time(uav)
+        if t_j <= 0.0:
+            return 0.0
+        return (uav.m_j * UAV_SPEED) / t_j
+
+    def compute_revenue_rate(self, uav: UAV) -> float:
+        """
+        z_j(T) = f(T_j) * r_j(T)
+        """
+        return self.compute_monitoring_frequency(uav) * self.compute_total_revenue(uav)
+
+    # ---------- Greedy assignment logic ----------
+
+    def reset(self) -> None:
+        for uav in self.uavs:
+            uav.reset()
+
+    def can_assign_target(self, uav: UAV, target_idx: int) -> bool:
+        """
+        Feasible if adding target to sequence yields m_j >= 1.
+        """
+        trial_sequence = uav.sequence + [target_idx]
+        trial_m_j = self.compute_m_j(trial_sequence)
+        return trial_m_j >= 1
+
+    def find_nearest_feasible_target(self, uav: UAV, unassigned_targets: List[int]) -> Optional[int]:
+        if not unassigned_targets:
+            return None
+
+        waypoints = self.environment.waypoints
+
+        current_index = uav.sequence[-1] if uav.sequence else DEPOT_INDEX
+        current_wp = waypoints[current_index]
+
+        feasible_targets = [
+            t_idx
+            for t_idx in unassigned_targets
+            if self.can_assign_target(uav, t_idx)
+        ]
+
+        if not feasible_targets:
+            return None
+
+        return min(
+            feasible_targets,
+            key=lambda t_idx: euclidean_distance(current_wp, waypoints[t_idx]),
+        )
+
+    def select_uav_with_min_tour_time(self) -> UAV:
+        """
+        Greedy rule: pick UAV with smallest current tour time.
+        """
+        min_time = min(self.current_tour_time(uav) for uav in self.uavs)
+
+        # If multiple UAVs tie for min time, pick one at random among the ties
+        candidates = [uav for uav in self.uavs if self.current_tour_time(uav) == min_time]
+        return random.choice(candidates)
+
+    def assign_targets_greedily(self) -> Tuple[List[UAV], List[int]]:
+        unassigned_targets = self.environment.target_waypoints.copy()
+
+        while unassigned_targets:
+            selected_uav = self.select_uav_with_min_tour_time()
+            nearest_target = self.find_nearest_feasible_target(selected_uav, unassigned_targets)
+
+            if nearest_target is None:
+                break
+
+            selected_uav.sequence.append(nearest_target)
+            selected_uav.m_j = self.compute_m_j(selected_uav.sequence)
+            unassigned_targets.remove(nearest_target)
+
+        return self.uavs, unassigned_targets
+
+    # ---------- Aggregate metrics ----------
+
+    def compute_total_revenue_all(self) -> float:
+        return sum(self.compute_total_revenue(uav) for uav in self.uavs)
+
+    def compute_total_revenue_rate_all(self) -> float:
+        return sum(self.compute_revenue_rate(uav) for uav in self.uavs)
+
+    def solve(self) -> Tuple[List[UAV], List[int], float, float]:
+        self.reset()
+        uavs, unassigned_targets = self.assign_targets_greedily()
+        total_revenue = self.compute_total_revenue_all()
+        total_revenue_rate = self.compute_total_revenue_rate_all()
+        return uavs, unassigned_targets, total_revenue, total_revenue_rate
+
+# ============================================================
+# Reporting
+# ============================================================
+
+def print_solution(
+    environment: GridEnvironment,
+    allocator: GreedyAllocator,
+    uavs: List[UAV],
+    unassigned_targets: List[int],
+    total_revenue: float,
+    total_revenue_rate: float,
+    header: str = "Greedy Result",
+) -> None:
+    print(f"\n=== {header} ===")
+    print(f"Number of UAVs (m): {allocator.num_uavs}")
+    print(f"Selected targets: {sorted(environment.target_waypoints)}")
+    print(f"Total revenue over tours: {total_revenue:.2f}")
+    print(f"Total revenue rate (sum_j z_j): {total_revenue_rate:.4f}")
+
+    for uav in uavs:
+        seq = uav.sequence
+        tour = allocator.build_tour(uav)
+        seq_revenue = allocator.compute_sequence_revenue(seq)
+        tour_time = allocator.current_tour_time(uav)
+        remaining_time = MAX_FLIGHT_TIME - tour_time
+        r_j = allocator.compute_total_revenue(uav)
+        f_j = allocator.compute_monitoring_frequency(uav)
+        z_j = allocator.compute_revenue_rate(uav)
+
+        print(f"\nUAV {uav.uav_id}")
+        print(f"  Sequence S_j: {seq if seq else 'No waypoints assigned'}")
+        print(f"  m_j (repetitions): {uav.m_j}")
+        print(f"  Tour T_j (indices): {tour}")
+        print(f"  Sequence revenue (one pass): {seq_revenue}")
+        print(f"  Total revenue r_j(T): {r_j:.2f}")
+        print(f"  Tour flight time T_j (s): {tour_time:.2f}")
+        print(f"  Remaining time (s): {remaining_time:.2f}")
+        print(f"  Monitoring frequency f(T_j): {f_j:.6f}")
+        print(f"  Revenue rate z_j(T): {z_j:.6f}")
+
+    if unassigned_targets:
+        print(f"\nUnassigned targets: {sorted(unassigned_targets)}")
+    else:
+        print("\nAll targets were assigned to at least one UAV (m_j >= 1).")
+        
+
+# ============================================================
+# Main: run many simulations and maximize revenue rate
+# ============================================================
+
+def run_simulation() -> None:
+    # Create a single fixed environment for all runs (same targets and revenues)
+    environment = GridEnvironment(seed=BASE_SEED)
+
+    # Ask the professor: how does the 20% high risk revenue woork?
+    environment.assign_random_revenues()
+
+    print("\n=== Fixed Environment Summary ===")
+    print(f"Total waypoints: {len(environment.waypoints)}")
+    print(f"Number of targets: {len(environment.target_waypoints)}\n")
+    
+    for i in sorted(environment.target_waypoints):
+        wp = environment.waypoints[i]
+        print(f"Target {i}: ({wp.x}, {wp.y}) with revenue {wp.revenue:.2f}")
+
+    overall_best_revenue_rate = -float("inf")
+    overall_best_result = None
+
+    # To store best revenue rate per m
+    per_m_best = {}
+
+    for m in UAVS:
+        best_total_revenue_rate_for_m = -float("inf")
+        best_result_for_m = None
+
+        allocator = GreedyAllocator(environment=environment, num_uavs=m)
+        uavs, unassigned_targets, total_revenue, total_revenue_rate = allocator.solve()
+
+        # Track best revenue rate for this m (maximize)
+        if total_revenue_rate > best_total_revenue_rate_for_m:
+            best_total_revenue_rate_for_m = total_revenue_rate
+            best_result_for_m = (
+                allocator,
+                uavs,
+                unassigned_targets,
+                total_revenue,
+                total_revenue_rate,
+            )
+
+        # Store best revenue rate for this m
+        per_m_best[m] = best_total_revenue_rate_for_m
+
+        print(f"\n=== Best result for m = {m} over {NUM_SIMULATION_RUNS} runs ===")
+        if best_result_for_m is None:
+            print("  No feasible solution found.")
         else:
-            # Uk cannot take more targets under Tfmax, move to UAV U(k+1)
-            k += 1
+            allocator, uavs, unassigned_targets, total_revenue, total_revenue_rate = best_result_for_m
+            print(f"  Best total revenue rate: {best_total_revenue_rate_for_m:.4f}")
+            # print_solution(environment, allocator, uavs, unassigned_targets, total_revenue, total_revenue_rate,
+            #               header=f"Best Greedy Result for m = {m}")
 
-    Mmin = k
-    uavs_Mmin = uavs[:Mmin]
-    return Mmin, uavs_Mmin
+            # Track overall best across all m (maximize)
+            if best_total_revenue_rate_for_m > overall_best_revenue_rate:
+                overall_best_revenue_rate = best_total_revenue_rate_for_m
+                overall_best_result = (m, environment, allocator, uavs, unassigned_targets,
+                                       total_revenue, total_revenue_rate)
 
-
-def greedy_task_assignment_phase2(uavs, waypoints, target_indices):
-    """
-    Phase 2 core of Algorithm 1 for a fixed number of UAVs m.
-
-    For a given set of m UAVs:
-      - Repeatedly select the UAV Us with the shortest cumulative time T_c(k).
-      - For Us, among all remaining targets, find those that keep Tf(k)
-        <= Tfmax(k) if assigned, then choose the nearest such target Pc.
-      - Assign Pc to Us and update its route.
-      - Stop when no remaining targets are left or no feasible assignments exist.
-
-    This implements steps 17–23 (task assignment) for a fixed m.
-
-    Args:
-        uavs (list[UAV]): list of m UAVs starting at the depot.
-        waypoints (list[Waypoint]): full grid of waypoints.
-        target_indices (list[int]): indices of target waypoints to be covered.
-        Tfmax_value (float): maximum flight time allowed for each UAV.
-
-    Returns:
-        list[UAV]: the same UAV list, with updated routes after greedy assignment.
-    """
-    remaining = set(target_indices)
-
-    while remaining:
-        # Select Us: the UAV with minimum cumulative time T_c(k)
-        us = min(
-            uavs,
-            key=lambda u: cumulative_time(u)
+    print("\n=== Overall best m (max revenue rate) ===")
+    if overall_best_result is None:
+        print("No feasible solution found for any m.")
+    else:
+        best_m, best_env, best_alloc, best_uavs, best_unassigned, best_total_revenue, best_total_revenue_rate = overall_best_result
+        print(f"Best m (number of UAVs): {best_m}")
+        print(f"Best total revenue rate: {best_total_revenue_rate:.4f}")
+        print_solution(
+            best_env,
+            best_alloc,
+            best_uavs,
+            best_unassigned,
+            best_total_revenue,
+            best_total_revenue_rate,
+            header="Overall Best Greedy Result (Max Revenue Rate)",
         )
 
-        last_wp = us.route[-1]
-
-        # Compute which remaining targets are feasible for Us under Tfmax
-        feasible = []
-        Tf_s = flight_time(us.route)
-        for idx in remaining:
-            wp = waypoints[idx]
-            extra_out = travel_time(last_wp, wp)
-            extra_back = travel_time(wp, depot)
-            if Tf_s + extra_out + extra_back <= MAX_FLIGHT_TIME:
-                feasible.append(idx)
-
-        if not feasible:
-            # This UAV cannot take any of the remaining targets;
-            # in this implementation we stop the entire allocation.
-            # (You could extend this to try other UAVs instead.)
-            break
-
-        # Among feasible targets, choose the nearest one to Us
-        closest_idx = min(
-            feasible,
-            key=lambda i: distance(last_wp, waypoints[i])
-        )
-        closest_wp = waypoints[closest_idx]
-
-        # Assign Pc to Us and update its route
-        us.route.append(closest_wp)
-        remaining.remove(closest_idx)
-
-    # After this loop, uavs encode an allocation scheme A_m for this m.
-    return uavs
-
-def greedy_allocation_algorithm(waypoints, target_indices):
-    """
-    Full greedy allocation algorithm based on Algorithm 1,
-    with a revenue-based objective instead of the paper's cost.
-
-    Phase 1:
-        - Find the minimal number of UAVs Mmin required to cover all targets
-          given the flight time constraint Tfmax. (Feasibility step.)
-
-    Phase 2:
-        - For each m in [Mmin, M], run the greedy task assignment (Phase 2 core).
-        - Compute total revenue for that m.
-        - Keep the m and assignment that maximize total revenue.
-
-    Args:
-        waypoints (list[Waypoint]): full grid of waypoints.
-        target_indices (list[int]): indices of target waypoints to be covered.
-        M (int): maximum number of UAVs considered.
-        Tfmax_value (float): maximum flight time allowed for each UAV.
-
-    Returns:
-        tuple:
-            optimal_m (int): number of UAVs m that yields maximum revenue.
-            optimal_assignment (list[list[int]]):
-                list of routes, each route is a list of waypoint IDs for one UAV.
-            optimal_revenue (float): maximum revenue achieved by the selected m.
-    """
-    # Phase 1: determine Mmin by feasibility (ignoring revenue)
-    Mmin, _ = find_Mmin(waypoints, target_indices)
-
-    best_m = Mmin
-    best_rev = -float('inf')
-    best_assignment = None
-
-    depot = waypoints[0]
-
-    # Phase 2: for each m in [Mmin, M], perform greedy assignment and evaluate revenue
-    for m in range(Mmin, M_MAX + 1):
-        # Initialize m UAVs at the depot
-        uavs_m = [UAV(uid=i+1, start_wp=depot) for i in range(m)]
-
-        # Greedy task assignment for this m
-        uavs_m = greedy_task_assignment_phase2(uavs_m, waypoints, target_indices)
-
-        # Compute total revenue for the resulting assignment
-        R_m = revenue_function(uavs_m)
-
-        # Keep the best (highest revenue) solution found so far
-        if R_m >= best_rev:
-            best_rev = R_m
-            best_m = m
-            # Store routes as lists of waypoint IDs for easier inspection/printing
-            best_assignment = [
-                [wp.id for wp in uav.route]
-                for uav in uavs_m
-            ]
-
-    return best_m, best_assignment, best_rev
-
+    print("\n=== Summary: best revenue rate per m ===")
+    for m in sorted(per_m_best.keys()):
+        print(f"m = {m}: best revenue rate = {per_m_best[m]:.4f}")
 
 if __name__ == "__main__":
-    # Build environment and get depot waypoint P0
-    waypoints = build_grid()
-    depot = waypoints[0]
-
-    # Fixed values just for testing
-    target_indices = [8, 168, 20, 119, 12, 135, 111, 69, 163, 100, 72, 46, 159, 104, 115, 145, 125, 27, 71, 44, 139]
-    target_revenues = [
-        534.27,
-        271.88,
-        593.41,
-        146.52,
-        415.09,
-        367.43,
-        492.75,
-        88.64,
-        577.32,
-        329.18,
-        212.97,
-        451.60,
-        189.34,
-        560.21,
-        305.47,
-        97.85,
-        248.63,
-        384.19,
-        140.72,
-        520.56,
-        276.04
-    ]
-
-    for idx, rev in zip(target_indices, target_revenues):
-        wp = waypoints[idx]
-        wp.revenue = rev
-        print(f"Target {wp.id}: ({wp.x}, {wp.y}), revenue = {wp.revenue:.2f}")
-
-    # Randomly choose TOTAL_TARGETS target waypoints (excluding depot 0)
-    # target_indices = random.sample(range(1, len(waypoints)), TOTAL_TARGETS)
-
-    # print("Target waypoints and revenues:")
-    # for i in target_indices:
-    #     wp = waypoints[i]
-    #     wp.update_revenue()  # assign random revenue to this target
-    #     print(f"Target {wp.id}: ({wp.x}, {wp.y}), revenue = {wp.revenue:.2f}")
-
-    # Run greedy allocation algorithm with revenue objective
-    optimal_m, optimal_assignment, optimal_revenue = greedy_allocation_algorithm(
-        waypoints=waypoints,
-        target_indices=target_indices,
-    )
-
-    print(f"\nOptimal number of UAVs (m): {optimal_m}")
-    print(f"Optimal revenue: {optimal_revenue:.2f}")
-    print("Optimal assignment (routes by waypoint IDs):")
-    if optimal_assignment is not None:
-        for i, route in enumerate(optimal_assignment):
-            print(f"UAV {i+1} route: {route}")
+    run_simulation()
