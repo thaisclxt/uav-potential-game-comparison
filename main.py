@@ -1,10 +1,12 @@
 import math, random, os, re
-import pandas as pd
 
 from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Tuple, Optional, Union
+
+import yaml
+import pandas as pd
 
 
 # ============================================================
@@ -15,36 +17,11 @@ from typing import List, Tuple, Optional, Union
 # ============================================================
 
 USE_EXTERNAL_WAYPOINTS = True
-MAX_FLIGHT_TIME = 1920 # TODO: confirm that this is the parameter used
-UAV_SPEED = 16 # TODO: confirm that this is the parameter used
-
-DEPOT_LOCATION = (0, 0)                     # Depot is fixed at the origin (0, 0)
-
-BASE_REVENUE = 30 # TODO: confirm that this is the parameter used
-BASE_SEED = 32
+DEPOT_LOCATION = (0, 0)
 
 OUTPUT_BASE_DIR = "results"                 # Base directory for saving results (Excel files)
-WAYPOINTS_ROOT = Path("waypoints")          # Root folder containing generated non-overlap waypoint files
-
-# Default grid parameters (used when USE_EXTERNAL_WAYPOINTS is False)
-if not USE_EXTERNAL_WAYPOINTS:
-    GRID_WIDTH = 3
-    GRID_HEIGHT = 3
-    GRID_SPACING = 1
-
-    UAV_SPEED = 1
-    MAX_FLIGHT_TIME = 20
-
-    MIN_WP_REVENUE = 60
-    MAX_WP_REVENUE = 600
-
-    USE_FIXED_TARGETS = True
-    FIXED_TARGET_INDICES = [2, 3, 5, 6, 7]
-
-    # If not using fixed targets, define parameters for random target selection and revenue assignment
-    if not USE_FIXED_TARGETS:
-        NUM_TARGETS = 5
-
+WAYPOINTS_PATH = Path("waypoints")          # Directory containing the generated Excel files with waypoints (used when USE_EXTERNAL_WAYPOINTS is True)
+SETTINGS_PATH = Path("settings.yaml")       # Path to the YAML file containing configuration parameters for the simulation
 
 # ============================================================
 # Data models
@@ -58,7 +35,7 @@ class Waypoint:
     x: float
     y: float
     wid: int
-    revenue: float = BASE_REVENUE
+    revenue: float
 
 
 @dataclass
@@ -66,8 +43,8 @@ class Depot:
     """
     Represents the depot location.
     """
-    x: float = DEPOT_LOCATION[0]
-    y: float = DEPOT_LOCATION[1]
+    x: float
+    y: float
 
 
 @dataclass
@@ -96,14 +73,39 @@ class GridEnvironment:
     Represents the grid environment with a depot and a set of target waypoints.
     Can be provided externally from generated Excel files or built as a default grid.
     """
-    def __init__(self, external_targets: Optional[List[Waypoint]] = None):
-        self.depot: Depot = Depot()
+    def __init__(
+        self,
+        *,
+        external_targets: Optional[List[Waypoint]] = None,
+        depot_location: Tuple[float, float],
+        base_revenue: float,
+        base_seed: int,
+        use_fixed_targets: bool,
+        fixed_target_indices: List[int],
+        grid_width: int,
+        grid_height: int,
+        grid_spacing: float,
+        min_wp_revenue: float,
+        max_wp_revenue: float,
+        num_targets: int,
+    ):
+        self.depot: Depot = Depot(x=depot_location[0], y=depot_location[1])
+        self.base_revenue = base_revenue
+        self.min_wp_revenue = min_wp_revenue
+        self.max_wp_revenue = max_wp_revenue
+        self.use_fixed_targets = use_fixed_targets
+        self.fixed_target_indices = fixed_target_indices
+        self.grid_width = grid_width
+        self.grid_height = grid_height
+        self.grid_spacing = grid_spacing
+        self.num_targets = num_targets
+
+        random.seed(base_seed)
 
         if external_targets:
             self.waypoints: List[Waypoint] = external_targets.copy()
             self.target_waypoints: List[Waypoint] = external_targets.copy()
         else:
-            random.seed(BASE_SEED)
             self.waypoints: List[Waypoint] = self._build_grid()
             self.target_waypoints: List[Waypoint] = self._select_waypoint_targets()
 
@@ -111,15 +113,15 @@ class GridEnvironment:
         """
         Build a grid of waypoints based on the specified GRID_WIDTH, GRID_HEIGHT, and GRID_SPACING.
         """
-        waypoints = []
+        waypoints: List[Waypoint] = []
         wid = 0
-        for i in range(GRID_WIDTH):
-            for j in range(GRID_HEIGHT):
-                if (i, j) == DEPOT_LOCATION:
+        for i in range(self.grid_width):
+            for j in range(self.grid_height):
+                if (i, j) == (self.depot.x, self.depot.y):
                     continue
-                x = j * GRID_SPACING
-                y = i * GRID_SPACING
-                waypoints.append(Waypoint(x=x, y=y, wid=wid))
+                x = j * self.grid_spacing
+                y = i * self.grid_spacing
+                waypoints.append(Waypoint(x=x, y=y, wid=wid, revenue=self.base_revenue))
                 wid += 1
         return waypoints
     
@@ -127,13 +129,13 @@ class GridEnvironment:
         """
         Select a fixed subset of waypoints to be the target waypoints.
         """
-        if USE_FIXED_TARGETS:
-            return [self.waypoints[i] for i in FIXED_TARGET_INDICES]
-        return random.sample(self.waypoints, NUM_TARGETS)
+        if self.use_fixed_targets:
+            return [self.waypoints[i] for i in self.fixed_target_indices]
+        return random.sample(self.waypoints, self.num_targets)
 
     def assign_random_revenues(self) -> None:
         for wp in self.target_waypoints:
-            wp.revenue = random.uniform(MIN_WP_REVENUE, MAX_WP_REVENUE)
+            wp.revenue = random.uniform(self.min_wp_revenue, self.max_wp_revenue)
 
     def print_summary(self) -> None:
         """
@@ -162,12 +164,11 @@ def euclidean_distance(a: Waypoint | Depot, b: Waypoint | Depot) -> float:
     return math.hypot(b.x - a.x, b.y - a.y)
 
 
-def travel_time(a: Waypoint | Depot, b: Waypoint | Depot) -> float:
+def travel_time(a: Waypoint | Depot, b: Waypoint | Depot, uav_speed: float) -> float:
     """
     Calculate the travel time between two points (waypoints or depot) based on the UAV speed.
     """
-    return euclidean_distance(a, b) / UAV_SPEED
-
+    return euclidean_distance(a, b) / uav_speed
 
 def extract_num_uavs(file_path: str) -> int:
     """
@@ -199,8 +200,8 @@ def load_waypoints_sheet(waypoints_file: str, sheet_name: str) -> List[Waypoint]
     - "Y": y-coordinate of the waypoint
     """
     df = pd.read_excel(waypoints_file, sheet_name=sheet_name)
-
     required_cols = {"Waypoint", "Revenue", "X", "Y"}
+    
     if not required_cols.issubset(df.columns):
         raise ValueError(
             f"Sheet {sheet_name} in {waypoints_file} must contain columns {required_cols}, "
@@ -229,9 +230,18 @@ class GreedyAllocator:
     """
     Implements a greedy algorithm to assign target waypoints to UAVs while maximizing revenue rate.
     """
-    def __init__(self, environment: GridEnvironment, num_uavs: int):
+    def __init__(        
+            self,
+            environment: GridEnvironment,
+            num_uavs: int,
+            uav_speed: float,
+            max_flight_time: float,
+        ):
         self.environment = environment
         self.num_uavs = num_uavs
+        self.uav_speed = uav_speed
+        self.max_flight_time = max_flight_time
+
         self.uavs = [UAV(uid=i) for i in range(num_uavs)]
 
     # ---------- Time and tour helpers ----------
@@ -248,16 +258,16 @@ class GreedyAllocator:
         first_wp = sequence[0]
         last_wp = sequence[-1]
 
-        total = travel_time(depot, first_wp)
+        total = travel_time(depot, first_wp, self.uav_speed)
 
         for rep in range(m_j):
             for wp_a, wp_b in zip(sequence[:-1], sequence[1:]):
-                total += travel_time(wp_a, wp_b)
+                total += travel_time(wp_a, wp_b, self.uav_speed)
 
             if rep < m_j - 1:
-                total += travel_time(last_wp, first_wp)
+                total += travel_time(last_wp, first_wp, self.uav_speed)
 
-        total += travel_time(last_wp, depot)
+        total += travel_time(last_wp, depot, self.uav_speed)
         return total
 
     def compute_m_j(self, sequence: List[Waypoint]) -> int:
@@ -271,21 +281,24 @@ class GreedyAllocator:
         first_wp = sequence[0]
         last_wp = sequence[-1]
 
-        depot_legs_time = travel_time(depot, first_wp) + travel_time(last_wp, depot)
+        depot_legs_time = (
+            travel_time(depot, first_wp, self.uav_speed)
+            + travel_time(last_wp, depot, self.uav_speed)
+        )
 
         internal_sequence_time = 0.0
         for wp_a, wp_b in zip(sequence[:-1], sequence[1:]):
-            internal_sequence_time += travel_time(wp_a, wp_b)
+            internal_sequence_time += travel_time(wp_a, wp_b, self.uav_speed)
 
-        internal_sequence_time += travel_time(last_wp, first_wp)
+        internal_sequence_time += travel_time(last_wp, first_wp, self.uav_speed)
 
-        if depot_legs_time > MAX_FLIGHT_TIME:
+        if depot_legs_time > self.max_flight_time:
             return 0
 
         if internal_sequence_time == 0.0:
             return 1
 
-        remaining_time = MAX_FLIGHT_TIME - depot_legs_time
+        remaining_time = self.max_flight_time - depot_legs_time
         max_repetitions = int(remaining_time // internal_sequence_time)
         return max(max_repetitions, 1)
 
@@ -330,7 +343,7 @@ class GreedyAllocator:
         t_j = self.current_tour_time(uav)
         if t_j <= 0.0:
             return 0.0
-        return (uav.m_j * UAV_SPEED) / t_j
+        return (uav.m_j * self.uav_speed) / t_j
 
     def compute_revenue_rate(self, uav: UAV) -> float:
         """
@@ -445,7 +458,7 @@ def print_solution(
         seq = uav.sequence
         tour = allocator.build_tour(uav)
         tour_time = allocator.current_tour_time(uav)
-        remaining_time = MAX_FLIGHT_TIME - tour_time
+        remaining_time = allocator.max_flight_time - tour_time
 
         print(f"\nUAV {uav.uid}")
         print(f"  Sequence S_j: {[wp.wid for wp in seq] if seq else 'No waypoints assigned'}")
@@ -503,6 +516,8 @@ def prepare_output_dirs(base_dir: str) -> Tuple[str, str]:
 
 def export_runs_to_excel(
     m: int,
+    uav_speed: float,
+    max_flight_time: float,
     grid_size: int,
     rev_sheets: List[pd.DataFrame],
     seq_sheets: List[pd.DataFrame],
@@ -520,7 +535,7 @@ def export_runs_to_excel(
     )
     seq_path = os.path.join(
         sequences_dir,
-        f"UAVs{m}_GRID{grid_size}_{MAX_FLIGHT_TIME}_{UAV_SPEED}_Greedy_sequences.xlsx"
+        f"UAVs{m}_GRID{grid_size}_{max_flight_time}_{uav_speed}_Greedy_sequences.xlsx"
     )
 
     with pd.ExcelWriter(rev_path) as writer:
@@ -534,11 +549,14 @@ def export_runs_to_excel(
     return rev_path, seq_path
 
 
-def run_simulation(waypoint_files: List[Path]) -> None:
+def run_simulation(params: dict, waypoint_files: List[Path]) -> None:
     """
     Run the simulation using external waypoint files. This function is called when USE_EXTERNAL_WAYPOINTS is True.
     It will process each waypoint file, extract the number of UAVs and grid size, load the waypoints from each sheet, run the greedy allocator, and save the results to Excel files.
     """
+    uav_speed = params["uav_speed"]
+    max_flight_time = params["max_flight_time"]
+
     for waypoint_file in waypoint_files:
         m = extract_num_uavs(str(waypoint_file))
         grid_size = extract_grid_size(str(waypoint_file))
@@ -551,9 +569,27 @@ def run_simulation(waypoint_files: List[Path]) -> None:
 
         for sheet_name in workbook.sheet_names:
             generated_targets = load_waypoints_sheet(str(waypoint_file), sheet_name)
-            environment = GridEnvironment(external_targets=generated_targets)
+            environment = GridEnvironment(
+                external_targets=generated_targets,
+                depot_location=DEPOT_LOCATION,
+                base_revenue=params["base_revenue"],
+                base_seed=params["base_seed"],
+                use_fixed_targets=params.get("use_fixed_targets", True),
+                fixed_target_indices=params.get("fixed_target_indices", [2, 3, 5, 6, 7]),
+                grid_width=params.get("grid_width", grid_size),
+                grid_height=params.get("grid_height", grid_size),
+                grid_spacing=params.get("grid_spacing", 1.0),
+                min_wp_revenue=params.get("min_wp_revenue", 60.0),
+                max_wp_revenue=params.get("max_wp_revenue", 600.0),
+                num_targets=params.get("num_targets", 5),
+            )
 
-            allocator = GreedyAllocator(environment=environment, num_uavs=m)
+            allocator = GreedyAllocator(
+                environment=environment,
+                num_uavs=m,
+                uav_speed=uav_speed,
+                max_flight_time=max_flight_time,
+            )
             uavs, unassigned_targets, total_revenue, total_revenue_rate = allocator.solve()
 
             # Greedy has no negotiation rounds, so store a single row with round 0
@@ -575,6 +611,8 @@ def run_simulation(waypoint_files: List[Path]) -> None:
         revenue_dir, sequences_dir = prepare_output_dirs(OUTPUT_BASE_DIR)
         revenue_file, sequences_file = export_runs_to_excel(
             m=m,
+            uav_speed=uav_speed,
+            max_flight_time=max_flight_time,
             grid_size=grid_size,
             rev_sheets=rev_sheets,
             seq_sheets=seq_sheets,
@@ -586,18 +624,36 @@ def run_simulation(waypoint_files: List[Path]) -> None:
         print(f"Saved sequences Excel: {sequences_file}")
 
 
-def run_example() -> None:
+def run_example(params: dict) -> None:
     """
     Run the example simulation using a default grid environment. This function is called when USE_EXTERNAL_WAYPOINTS is False.
     It will build a default grid environment, assign random revenues to the target waypoints, run the greedy allocator, and print the results to the console.
     """
-    environment = GridEnvironment()
+    environment = GridEnvironment(
+        external_targets=None,
+        depot_location=DEPOT_LOCATION,
+        base_revenue=params["base_revenue"],
+        base_seed=params["base_seed"],
+        use_fixed_targets=params["use_fixed_targets"],
+        fixed_target_indices=params["fixed_target_indices"],
+        grid_width=params["grid_width"],
+        grid_height=params["grid_height"],
+        grid_spacing=params["grid_spacing"],
+        min_wp_revenue=params["min_wp_revenue"],
+        max_wp_revenue=params["max_wp_revenue"],
+        num_targets=params.get("num_targets", 5),
+    )
     environment.assign_random_revenues()
 
     print("\n=== Default Grid Environment ===")
     environment.print_summary()
 
-    allocator = GreedyAllocator(environment=environment, num_uavs=2)
+    allocator = GreedyAllocator(
+        environment=environment,
+        num_uavs=params["num_uavs"],
+        uav_speed=params["uav_speed"],
+        max_flight_time=params["max_flight_time"],
+    )
     uavs, unassigned_targets, total_revenue, total_revenue_rate = allocator.solve()
 
     print_solution(
@@ -611,18 +667,59 @@ def run_example() -> None:
     )
 
 
+def load_configuration(path: Path) -> dict:
+    with open(path, "r") as f:
+        return yaml.safe_load(f) or {}
+
+
+def setup_parameters(config: dict, use_external_waypoints: bool) -> dict:
+    uav = config.get("uav", {})
+    simulation = config.get("simulation", {})
+    grid = config.get("grid", {})
+    revenue = config.get("revenue", {})
+
+    params = {
+        "uav_speed": uav.get("speed", 16.0),
+        "max_flight_time": uav.get("max_flight_time", 1920.0),
+        "base_revenue": revenue.get("fixed_value", 30.0),
+        "base_seed": simulation.get("seed", 32),
+        "num_uavs": uav.get("num_uavs", 2),
+    }
+
+    if not use_external_waypoints:
+        params.update(
+            {
+                "use_fixed_targets": True,
+                "fixed_target_indices": [2, 3, 5, 6, 7],
+                "grid_width": grid.get("width", 3),
+                "grid_height": grid.get("height", 3),
+                "grid_spacing": grid.get("spacing", 1.0),
+                "min_wp_revenue": revenue.get("min", 60.0),
+                "max_wp_revenue": revenue.get("max", 600.0),
+                # default if you ever switch use_fixed_targets to False
+                "num_targets": 5,
+            }
+        )
+
+    return params
+
 # ============================================================
 # Main
 # ============================================================
-
 if __name__ == "__main__":
-    random.seed(BASE_SEED)
+    config = load_configuration(SETTINGS_PATH)
+    params = setup_parameters(config, use_external_waypoints=USE_EXTERNAL_WAYPOINTS)
 
-    waypoint_files = sorted(WAYPOINTS_ROOT.rglob("*_waypoints.xlsx"))
+    random.seed(params["base_seed"])
+
+    waypoint_files = sorted(WAYPOINTS_PATH.rglob("*_waypoints.xlsx"))
 
     if USE_EXTERNAL_WAYPOINTS:
         if not waypoint_files:
-            raise FileNotFoundError(f"No waypoint Excel files found under: {WAYPOINTS_ROOT}")
-        run_simulation(waypoint_files)
+            raise FileNotFoundError(f"No waypoint Excel files found under: {WAYPOINTS_PATH}")
+        run_simulation(params=params, waypoint_files=waypoint_files)
     else:
-        run_example()
+        run_example(params=params)
+
+# TODO: check the greedy logic, it's higly probabily that something is wrong
+# TODO: fix the target waypoint selection to get all the positive waypoints instead of all the waypoints
