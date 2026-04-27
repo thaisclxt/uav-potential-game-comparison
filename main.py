@@ -1,13 +1,15 @@
 import math, random, os, re
+import yaml
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 
 from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Tuple, Optional, Union
-
-import yaml
-import pandas as pd
-
+from matplotlib.animation import PillowWriter
 
 # ============================================================
 # Configuration
@@ -19,13 +21,296 @@ import pandas as pd
 USE_EXTERNAL_WAYPOINTS = True
 DEPOT_LOCATION = (0, 0)
 
-OUTPUT_BASE_DIR = "results"                 # Base directory for saving results (Excel files)
+OUTPUT_BASE_DIR = "Results"                 # Base directory for saving results (Excel files)
 WAYPOINTS_PATH = Path("waypoints")          # Directory containing the generated Excel files with waypoints (used when USE_EXTERNAL_WAYPOINTS is True)
 SETTINGS_PATH = Path("settings.yaml")       # Path to the YAML file containing configuration parameters for the simulation
 
 # ============================================================
 # Data models
 # ============================================================
+
+@dataclass
+class SimpleConfig:
+    results_dir: str
+    visualization_dir: str
+    speed: float
+    max_flight_time: float
+
+def load_simple_config(config: dict) -> SimpleConfig:
+    project = config.get("project", {})
+    uav = config.get("uav", {})
+    return SimpleConfig(
+        results_dir=project.get("results_dir", "Results"),
+        visualization_dir=project.get("visualization_dir", "Visualizations"),
+        speed=float(uav.get("speed", 16)),
+        max_flight_time=float(uav.get("max_flight_time", 1920)),
+    )
+
+def _algo_label_from_seq_file(seq_file: Path) -> Optional[str]:
+    stem = seq_file.stem.replace("_sequences", "")
+    if "IRADA" in stem:
+        return "IRADA"
+    parts = stem.split("_")
+    for i, p in enumerate(parts):
+        if p.startswith("Mode"):
+            if i + 1 < len(parts):
+                return f"{p}_{parts[i + 1]}"
+            return p
+    return None
+
+
+def _mode_from_path(p: Path) -> str:
+    parts = p.parts
+    if "NonOverlap" in parts:
+        return "NonOverlap"
+    if "Overlap" in parts:
+        return "Overlap"
+    if "IRADA" in parts or "Benchmarking" in parts:
+        return "IRADA"
+    return "Other"
+
+
+def vis_gifs_root_for_sim(vis_root: Path, mode: str, seq_sim_path: Path) -> Path:
+    date = seq_sim_path.parent.name  # YYYY-MM-DD
+    sim_name = seq_sim_path.name     # simulation_k
+    return vis_root / mode / "gifs" / date / sim_name
+
+
+def get_revenue_file_for_sequence(seq_file: Path, rev_dir: Path) -> Path | None:
+    stem = seq_file.stem.replace("_sequences", "")
+    parts = stem.split("_")
+
+    if "IRADA" in parts:
+        rev_stem = f"{parts[0]}_{parts[1]}_IRADA"
+        cand = rev_dir / f"{rev_stem}.xlsx"
+        if cand.exists():
+            return cand
+        cand2 = rev_dir / f"{stem}.xlsx"
+        if cand2.exists():
+            return cand2
+        return None
+
+    if parts[-1] == "Greedy":
+        cand = rev_dir / f"{parts[0]}_{parts[1]}_Greedy.xlsx"
+        if cand.exists():
+            return cand
+
+    mode_idx = next((i for i, p in enumerate(parts) if p.startswith("Mode")), None)
+    if mode_idx is not None and mode_idx + 1 < len(parts):
+        rev_stem = f"{parts[0]}_{parts[1]}_{parts[mode_idx]}_{parts[mode_idx + 1]}"
+        cand = rev_dir / f"{rev_stem}.xlsx"
+        if cand.exists():
+            return cand
+
+    cand2 = rev_dir / f"{stem}.xlsx"
+    if cand2.exists():
+        return cand2
+
+    return None
+
+def generate_blockspot_gifs(
+    results_base_dir: str,
+    waypoints_root: Path,
+    cfg: SimpleConfig,
+) -> None:
+    """
+    Generate GIFs with grid blockspots for the latest Greedy simulation (today's date):
+    - reads sequences from results/sequences/YYYY-MM-DD/simulation_1
+    - reads revenue from   results/revenue/YYYY-MM-DD/simulation_1
+    - finds waypoints by UAVsM_GRIDN_waypoints.xlsx anywhere under waypoints_root
+    Saves GIFs to Visualizations/Greedy/gifs/YYYY-MM-DD/simulation_1/<algo>/*.gif
+    """
+    here = Path(__file__).parent
+
+    # Use today's date for results
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    seq_sim_dir = Path(results_base_dir) / "sequences" / date_str / "simulation_1"
+    rev_sim_dir = Path(results_base_dir) / "revenue"   / date_str / "simulation_1"
+
+    if not seq_sim_dir.exists():
+        print(f"[GIF] sequences dir not found: {seq_sim_dir}")
+        return
+    if not rev_sim_dir.exists():
+        print(f"[GIF] revenue dir not found: {rev_sim_dir}")
+        return
+
+    mode = "Greedy"
+    vis_root = here / cfg.visualization_dir
+    gifs_sim_root = vis_gifs_root_for_sim(vis_root, mode, seq_sim_dir)
+    gifs_sim_root.mkdir(parents=True, exist_ok=True)
+
+    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    zero_color = "#CCCCCC"
+    nonzero_color = "#111111"
+
+    # Loop over each *_sequences.xlsx in this simulation
+    for seq_file in seq_sim_dir.glob("*_sequences.xlsx"):
+        base_stem = seq_file.stem.replace("_sequences", "")
+        parts = base_stem.split("_")
+
+        algo_label = _algo_label_from_seq_file(seq_file) or "Greedy"
+
+        rev_dir = rev_sim_dir
+
+        rev_f = get_revenue_file_for_sequence(seq_file, rev_dir)
+        if rev_f is None or not rev_f.exists():
+            print(f"[GIF] Skipping {base_stem}: revenue file not found.")
+            continue
+
+        # Waypoints filename pattern: UAVsM_GRIDN_waypoints.xlsx
+        if len(parts) < 2:
+            print(f"[GIF] Skipping {base_stem}: cannot parse UAVs/GRID.")
+            continue
+
+        wp_pattern = f"{parts[0]}_{parts[1]}_waypoints.xlsx"
+        wp_matches = sorted(waypoints_root.rglob(wp_pattern))
+        if not wp_matches:
+            print(f"[GIF] Skipping {base_stem}: no waypoint file found matching {wp_pattern}")
+            continue
+
+        wp_f = wp_matches[0]
+
+        rev_sheets = pd.read_excel(rev_f, sheet_name=None, index_col=0)
+        seq_sheets = pd.read_excel(seq_file, sheet_name=None, index_col=0)
+
+        # Get UAV count and grid size from filename tokens
+        try:
+            n_uavs = int(parts[0][4:])
+            grid_dim = int(parts[1][4:])
+        except Exception:
+            n_uavs = 0
+            grid_dim = 0
+
+        cfg_gifs_dir = gifs_sim_root / algo_label
+        cfg_gifs_dir.mkdir(parents=True, exist_ok=True)
+
+        for run_name, seq_df in seq_sheets.items():
+            rev_df = rev_sheets.get(run_name)
+            if rev_df is None:
+                continue
+
+            # Align revenue length to sequences (forward-fill)
+            n_seq = len(seq_df)
+            n_rev = len(rev_df)
+            if n_rev < n_seq:
+                last_row = rev_df.iloc[-1]
+                extra = pd.DataFrame([last_row] * (n_seq - n_rev), columns=rev_df.columns)
+                rev_df = pd.concat([rev_df, extra], ignore_index=True)
+                print(
+                    f"[GIF] Extended revenue {base_stem}:{run_name} "
+                    f"from {n_rev} to {n_seq} rows."
+                )
+            elif n_rev > n_seq:
+                rev_df = rev_df.iloc[:n_seq].copy()
+                print(
+                    f"[GIF] Truncated revenue {base_stem}:{run_name} "
+                    f"from {n_rev} to {n_seq} rows."
+                )
+
+            seq_df = seq_df.reset_index(drop=True)
+            rev_df = rev_df.reset_index(drop=True)
+
+            df_wp = pd.read_excel(wp_f, sheet_name=run_name)
+            coords = {
+                int(r.Waypoint): (float(r.X), float(r.Y), float(r.Revenue))
+                for _, r in df_wp.iterrows()
+            }
+
+            xs_sorted = [coords[i][0] for i in sorted(coords)]
+            if len(xs_sorted) >= 2:
+                d = abs(xs_sorted[1] - xs_sorted[0])
+            else:
+                d = 1.0
+
+            xs_all = [c[0] for c in coords.values()]
+            ys_all = [c[1] for c in coords.values()]
+            x_span = max(xs_all) - min(xs_all)
+            y_span = max(ys_all) - min(ys_all)
+
+            ips = 0.5  # inches per spacing
+            sidebar = 2.5
+            fig_w = x_span * ips + sidebar
+            fig_h = y_span * ips + 1.0
+
+            fig = plt.figure(figsize=(fig_w, fig_h))
+
+            header = (
+                f"Greedy UAVs = {n_uavs} Grid = {grid_dim} × {grid_dim}\n"
+                f"Simulation Run = {run_name.replace('SimRun', '')}"
+            )
+            fig.text(0.5, 0.98, header, ha="center", va="top", fontsize=10)
+
+            ax = fig.add_axes([0.05, 0.1, 0.7, 0.8])
+            ax.set_xlabel("X")
+            ax.set_ylabel("Y")
+            ax.set_aspect("equal", adjustable="box")
+
+            wp_rects = {}
+            for wid, (x, y, rev_val) in coords.items():
+                rect = plt.Rectangle(
+                    (x - 0.5 * d, y - 0.5 * d),
+                    d,
+                    d,
+                    facecolor=zero_color if rev_val <= 0 else nonzero_color,
+                    edgecolor="black",
+                    linewidth=0.5,
+                )
+                ax.add_patch(rect)
+                wp_rects[wid] = rect
+
+            ax.set_xlim(min(xs_all) - d, max(xs_all) + d)
+            ax.set_ylim(min(ys_all) - d, max(ys_all) + d)
+
+            uav_cols = [c for c in seq_df.columns if str(c).upper().startswith("UAV")]
+            uav_colors = {j: colors[j % len(colors)] for j in range(len(uav_cols))}
+
+            paths = {
+                j: ax.plot([], [], color=uav_colors[j], linewidth=1.0)[0]
+                for j in range(len(uav_cols))
+            }
+
+            def frame_to_paths(frame: int):
+                for j, ucol in enumerate(uav_cols):
+                    seq_str = str(seq_df.iloc[frame][ucol])
+                    if not seq_str or seq_str.lower() == "nan":
+                        paths[j].set_data([], [])
+                        continue
+                    ids = [int(x) for x in seq_str.split("-") if x]
+                    xs = [coords[i][0] for i in ids if i in coords]
+                    ys = [coords[i][1] for i in ids if i in coords]
+                    paths[j].set_data(xs, ys)
+
+            time_text = fig.text(0.78, 0.9, "", ha="left", va="center", fontsize=10)
+            rev_text = fig.text(0.78, 0.85, "", ha="left", va="center", fontsize=10)
+
+            def update(frame: int):
+                frame_to_paths(frame)
+                t = frame * cfg.max_flight_time / max(1, len(seq_df) - 1)
+                time_text.set_text(f"Round {frame}\nTime ≈ {t:.1f}s")
+                tot = 0.0
+                for c in rev_df.columns:
+                    if str(c).upper().startswith("UAV"):
+                        tot += float(rev_df.iloc[frame][c])
+                rev_text.set_text(f"Total revenue rate:\n{tot:.1f}")
+                return list(paths.values()) + [time_text, rev_text]
+
+            anim = animation.FuncAnimation(
+                fig,
+                update,
+                frames=len(seq_df),
+                interval=300,
+                blit=False,
+                repeat=False,
+            )
+
+            gif_name = f"{base_stem}_{run_name}.gif"
+            out_path = cfg_gifs_dir / gif_name
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+
+            print(f"[GIF] Saving {out_path}")
+            writer = PillowWriter(fps=3)
+            anim.save(str(out_path), writer=writer)
+            plt.close(fig)
 
 @dataclass
 class Waypoint:
@@ -405,7 +690,7 @@ class GreedyAllocator:
 
         while unassigned_targets:
             selected_uav = self.select_uav_with_min_tour_time()
-            print(f"Selected UAV {selected_uav.uid} with current tour time {self.current_tour_time(selected_uav):.2f} seconds for assignment.")
+            # print(f"Selected UAV {selected_uav.uid} with current tour time {self.current_tour_time(selected_uav):.2f} seconds for assignment.")
             nearest_target = self.find_nearest_feasible_target(selected_uav, unassigned_targets)
 
             if nearest_target is None:
@@ -714,6 +999,7 @@ def setup_parameters(config: dict, use_external_waypoints: bool) -> dict:
 if __name__ == "__main__":
     config = load_configuration(SETTINGS_PATH)
     params = setup_parameters(config, use_external_waypoints=USE_EXTERNAL_WAYPOINTS)
+    simple_cfg = load_simple_config(config)
 
     random.seed(params["base_seed"])
 
@@ -723,5 +1009,12 @@ if __name__ == "__main__":
         if not waypoint_files:
             raise FileNotFoundError(f"No waypoint Excel files found under: {WAYPOINTS_PATH}")
         run_simulation(params=params, waypoint_files=waypoint_files)
+
+        # NEW: generate GIFs with blockspots
+        generate_blockspot_gifs(
+            results_base_dir=OUTPUT_BASE_DIR,
+            waypoints_root=WAYPOINTS_PATH,
+            cfg=simple_cfg,
+        )
     else:
         run_example(params=params)
