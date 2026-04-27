@@ -102,9 +102,9 @@ class GridEnvironment:
 
         random.seed(base_seed)
 
-        if external_targets:
+        if external_targets is not None:
             self.waypoints: List[Waypoint] = external_targets.copy()
-            self.target_waypoints: List[Waypoint] = external_targets.copy()
+            self.target_waypoints: List[Waypoint] = [wp for wp in self.waypoints if wp.revenue > 0]
         else:
             self.waypoints: List[Waypoint] = self._build_grid()
             self.target_waypoints: List[Waypoint] = self._select_waypoint_targets()
@@ -286,20 +286,24 @@ class GreedyAllocator:
             + travel_time(last_wp, depot, self.uav_speed)
         )
 
-        internal_sequence_time = 0.0
-        for wp_a, wp_b in zip(sequence[:-1], sequence[1:]):
-            internal_sequence_time += travel_time(wp_a, wp_b, self.uav_speed)
-
-        internal_sequence_time += travel_time(last_wp, first_wp, self.uav_speed)
-
         if depot_legs_time > self.max_flight_time:
             return 0
 
-        if internal_sequence_time == 0.0:
+        internal_sequence_time = sum(
+            travel_time(wp_a, wp_b, self.uav_speed) for wp_a, wp_b in zip(sequence[:-1], sequence[1:])
+        )
+
+        if len(sequence) == 1:
+            return 1
+        
+        cycle_closure_time = travel_time(last_wp, first_wp, self.uav_speed)
+        repeated_cycle_time = internal_sequence_time + cycle_closure_time
+
+        if repeated_cycle_time <= 0:
             return 1
 
-        remaining_time = self.max_flight_time - depot_legs_time
-        max_repetitions = int(remaining_time // internal_sequence_time)
+        remaining_time = self.max_flight_time - depot_legs_time + cycle_closure_time
+        max_repetitions = int(remaining_time // repeated_cycle_time)
         return max(max_repetitions, 1)
 
     def build_tour(self, uav: UAV) -> List[Union[Depot, Waypoint]]:
@@ -401,6 +405,7 @@ class GreedyAllocator:
 
         while unassigned_targets:
             selected_uav = self.select_uav_with_min_tour_time()
+            print(f"Selected UAV {selected_uav.uid} with current tour time {self.current_tour_time(selected_uav):.2f} seconds for assignment.")
             nearest_target = self.find_nearest_feasible_target(selected_uav, unassigned_targets)
 
             if nearest_target is None:
@@ -720,6 +725,3 @@ if __name__ == "__main__":
         run_simulation(params=params, waypoint_files=waypoint_files)
     else:
         run_example(params=params)
-
-# TODO: check the greedy logic, it's higly probabily that something is wrong
-# TODO: fix the target waypoint selection to get all the positive waypoints instead of all the waypoints
