@@ -1,7 +1,6 @@
 project:
-  results_dir: results
+  outputs_dir: outputs
   waypoints_dir: waypoints
-  visualization_dir: visualizations
 
 simulation:
   seed: 32
