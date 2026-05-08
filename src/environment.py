@@ -20,7 +20,7 @@ class GridEnvironment:
         wp_max_revenue: float,
         target_waypoints: Optional[List[Waypoint]] = None,
         fixed_target_indices: Optional[list[int]] = None,
-    ):
+    ) -> None:
         self.project_configuration = project_configuration
         self.simulation = simulation
         self.width = width
