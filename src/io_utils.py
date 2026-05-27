@@ -15,14 +15,14 @@ def prepare_scenario_outputs_dirs(
     scenario_dir = outputs_dir / f"UAVs{m}_GRID{grid_size}"
 
     revenue_dir = scenario_dir / "revenue"
-    sequences_dir = scenario_dir / "sequences"
+    tour_dir = scenario_dir / "tour"
     visualizations_dir = scenario_dir / "visualizations"
 
     revenue_dir.mkdir(parents=True, exist_ok=True)
-    sequences_dir.mkdir(parents=True, exist_ok=True)
+    tour_dir.mkdir(parents=True, exist_ok=True)
     visualizations_dir.mkdir(parents=True, exist_ok=True)
 
-    return scenario_dir, revenue_dir, sequences_dir, visualizations_dir
+    return scenario_dir, revenue_dir, tour_dir, visualizations_dir
 
 
 def export_runs_to_excel(
@@ -33,14 +33,14 @@ def export_runs_to_excel(
     rev_sheets: List[pd.DataFrame],
     seq_sheets: List[pd.DataFrame],
     revenue_dir: str,
-    sequences_dir: str,
+    tour_dir: str,
 ) -> Tuple[str, str]:
     rev_path = os.path.join(
         revenue_dir,
         f"UAVs{m}_GRID{grid_size}_Greedy.xlsx"
     )
     seq_path = os.path.join(
-        sequences_dir,
+        tour_dir,
         f"UAVs{m}_GRID{grid_size}_{max_flight_time}_{uav_speed}_Greedy_sequences.xlsx"
     )
 

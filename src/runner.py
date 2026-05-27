@@ -40,8 +40,8 @@ def _build_run_dataframes(
         seq_row[f"m_{uav.uid}"] = uav.m_j
 
     revenue_df = pd.DataFrame([rev_row])
-    sequence_df = pd.DataFrame([seq_row])
-    return revenue_df, sequence_df
+    tour_df = pd.DataFrame([seq_row])
+    return revenue_df, tour_df
 
 
 def _run_one_environment(
@@ -52,7 +52,7 @@ def _run_one_environment(
     greedy_rev_sheets: List[pd.DataFrame],
     greedy_seq_sheets: List[pd.DataFrame],
     clusterga_rev_sheets: List[pd.DataFrame],
-    clusterga_seq_sheets: List[pd.DataFrame],
+    clusterga_tour_sheets: List[pd.DataFrame],
     uav_cfg: UAVConfig,
 ) -> None:
     greedy_allocator = GreedyAllocator(
@@ -73,12 +73,12 @@ def _run_one_environment(
         greedy_allocator.solve()
     )
 
-    greedy_revenue_df, greedy_sequence_df = _build_run_dataframes(
+    greedy_revenue_df, greedy_tour_df = _build_run_dataframes(
         uavs=greedy_uavs,
         allocator=greedy_allocator,
     )
     greedy_rev_sheets.append(greedy_revenue_df)
-    greedy_seq_sheets.append(greedy_sequence_df)
+    greedy_seq_sheets.append(greedy_tour_df)
 
     print(
         f"[RUNNER][Greedy] {source_label} | {run_label} | "
@@ -91,12 +91,12 @@ def _run_one_environment(
         cluster_ga_allocator.solve()
     )
 
-    cluster_revenue_df, cluster_sequence_df = _build_run_dataframes(
+    cluster_revenue_df, cluster_tour_df = _build_run_dataframes(
         uavs=cluster_uavs,
         allocator=cluster_ga_allocator,
     )
     clusterga_rev_sheets.append(cluster_revenue_df)
-    clusterga_seq_sheets.append(cluster_sequence_df)
+    clusterga_tour_sheets.append(cluster_tour_df)
 
     print(
         f"[RUNNER][ClusterGA] {source_label} | {run_label} | "
@@ -127,13 +127,13 @@ def run_simulation(
                 print(f"[RUNNER] Skipping {wp_file.name}: {exc}")
                 continue
 
-            _, greedy_revenue_dir, greedy_sequences_dir, _ = prepare_scenario_outputs_dirs(
+            _, greedy_revenue_dir, greedy_tour_dir, _ = prepare_scenario_outputs_dirs(
                 outputs_dir=greedy_outputs_dir,
                 m=n_uavs,
                 grid_size=grid_size,
             )
 
-            _, cluster_revenue_dir, cluster_sequences_dir, _ = prepare_scenario_outputs_dirs(
+            _, cluster_revenue_dir, cluster_tour_dir, _ = prepare_scenario_outputs_dirs(
                 outputs_dir=cluster_ga_outputs_dir,
                 m=n_uavs,
                 grid_size=grid_size,
@@ -142,7 +142,7 @@ def run_simulation(
             greedy_rev_sheets: List[pd.DataFrame] = []
             greedy_seq_sheets: List[pd.DataFrame] = []
             clusterga_rev_sheets: List[pd.DataFrame] = []
-            clusterga_seq_sheets: List[pd.DataFrame] = []
+            clusterga_tour_sheets: List[pd.DataFrame] = []
 
             print(
                 f"\n=== Processing waypoint file: {wp_file} "
@@ -175,7 +175,7 @@ def run_simulation(
                     greedy_rev_sheets=greedy_rev_sheets,
                     greedy_seq_sheets=greedy_seq_sheets,
                     clusterga_rev_sheets=clusterga_rev_sheets,
-                    clusterga_seq_sheets=clusterga_seq_sheets,
+                    clusterga_tour_sheets=clusterga_tour_sheets,
                     uav_cfg=uav_cfg,
                 )
 
@@ -187,7 +187,7 @@ def run_simulation(
                 rev_sheets=greedy_rev_sheets,
                 seq_sheets=greedy_seq_sheets,
                 revenue_dir=greedy_revenue_dir,
-                sequences_dir=greedy_sequences_dir,
+                tour_dir=greedy_tour_dir,
             )
 
             export_runs_to_excel(
@@ -196,22 +196,22 @@ def run_simulation(
                 max_flight_time=uav_cfg.max_flight_time,
                 grid_size=grid_size,
                 rev_sheets=clusterga_rev_sheets,
-                seq_sheets=clusterga_seq_sheets,
+                seq_sheets=clusterga_tour_sheets,
                 revenue_dir=cluster_revenue_dir,
-                sequences_dir=cluster_sequences_dir,
+                tour_dir=cluster_tour_dir,
             )
 
     else:
         n_uavs = uav_cfg.num_uavs
         grid_size = grid_cfg.width
 
-        _, greedy_revenue_dir, greedy_sequences_dir, _ = prepare_scenario_outputs_dirs(
+        _, greedy_revenue_dir, greedy_tour_dir, _ = prepare_scenario_outputs_dirs(
             outputs_dir=greedy_outputs_dir,
             m=n_uavs,
             grid_size=grid_size,
         )
 
-        _, cluster_revenue_dir, cluster_sequences_dir, _ = prepare_scenario_outputs_dirs(
+        _, cluster_revenue_dir, cluster_tour_dir, _ = prepare_scenario_outputs_dirs(
             outputs_dir=cluster_ga_outputs_dir,
             m=n_uavs,
             grid_size=grid_size,
@@ -220,7 +220,7 @@ def run_simulation(
         greedy_rev_sheets: List[pd.DataFrame] = []
         greedy_seq_sheets: List[pd.DataFrame] = []
         clusterga_rev_sheets: List[pd.DataFrame] = []
-        clusterga_seq_sheets: List[pd.DataFrame] = []
+        clusterga_tour_sheets: List[pd.DataFrame] = []
 
         print(
             f"\n=== Running config-based simulation "
@@ -267,7 +267,7 @@ def run_simulation(
                 greedy_rev_sheets=greedy_rev_sheets,
                 greedy_seq_sheets=greedy_seq_sheets,
                 clusterga_rev_sheets=clusterga_rev_sheets,
-                clusterga_seq_sheets=clusterga_seq_sheets,
+                clusterga_tour_sheets=clusterga_tour_sheets,
                 uav_cfg=uav_cfg,
             )
 
@@ -279,7 +279,7 @@ def run_simulation(
             rev_sheets=greedy_rev_sheets,
             seq_sheets=greedy_seq_sheets,
             revenue_dir=greedy_revenue_dir,
-            sequences_dir=greedy_sequences_dir,
+            tour_dir=greedy_tour_dir,
         )
 
         export_runs_to_excel(
@@ -288,9 +288,9 @@ def run_simulation(
             max_flight_time=uav_cfg.max_flight_time,
             grid_size=grid_size,
             rev_sheets=clusterga_rev_sheets,
-            seq_sheets=clusterga_seq_sheets,
+            seq_sheets=clusterga_tour_sheets,
             revenue_dir=cluster_revenue_dir,
-            sequences_dir=cluster_sequences_dir,
+            tour_dir=cluster_tour_dir,
         )
 
         print(f"[RUNNER] Saved Greedy outputs to:    {greedy_outputs_dir / f'UAVs{n_uavs}_GRID{grid_size}'}")

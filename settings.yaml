@@ -1,5 +1,5 @@
 project:
-  outputs_dir: outputs
+  outputs_dir: results
   waypoints_dir: waypoints
 
 simulation:

@@ -107,7 +107,7 @@ def generate_uav_contribution_boxplots(outputs_dir: Path) -> None:
             continue
 
         visualizations_dir.mkdir(parents=True, exist_ok=True)
-        out_path = visualizations_dir / "uav_contribution_greedy.png"
+        out_path = visualizations_dir / "revenue_rate.png"
 
         # Create boxplot: one box per UAV, showing distribution over runs
         fig, ax = plt.subplots(figsize=(5, 6))
