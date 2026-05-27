@@ -52,7 +52,6 @@ class GreedyAllocator:
         return [self.environment.depot] + (uav.sequence * uav.m_j) + [self.environment.depot]
 
 
-    # TODO: I need to fix to cumulative flight time
     def current_tour_time(self, uav: UAV) -> float:
         """
         Compute the current tour flight time for a UAV based on its assigned sequence and number of repetitions.
@@ -112,8 +111,15 @@ class GreedyAllocator:
 
     def _compute_tour_flight_time(self, sequence: List[Waypoint], m_j: int) -> float:
         """
-        Compute the total flight time of a tour given a sequence of waypoints and number of repetitions.
-        The tour starts and ends at the depot, and visits the waypoints in the sequence m_j times.
+        Compute the total flight time of a repeated tour:
+        depot -> sequence repeated m_j times -> depot
+
+        For m_j >= 1:
+        total =
+            depot -> first
+            + m_j * (internal sequence traversal)
+            + (m_j - 1) * (last -> first cycle closure)
+            + last -> depot
         """
         if not sequence or m_j <= 0:
             return 0.0
@@ -122,22 +128,32 @@ class GreedyAllocator:
         first_wp = sequence[0]
         last_wp = sequence[-1]
 
-        total = travel_time(depot, first_wp, self.uav_speed)
+        outbound_time = travel_time(depot, first_wp, self.uav_speed)
+        return_time = travel_time(last_wp, depot, self.uav_speed)
 
-        for rep in range(m_j):
-            for wp_a, wp_b in zip(sequence[:-1], sequence[1:]):
-                total += travel_time(wp_a, wp_b, self.uav_speed)
+        internal_sequence_time = sum(
+            travel_time(wp_a, wp_b, self.uav_speed)
+            for wp_a, wp_b in zip(sequence[:-1], sequence[1:])
+        )
 
-            if rep < m_j - 1:
-                total += travel_time(last_wp, first_wp, self.uav_speed)
+        cycle_closure_time = 0.0
+        if len(sequence) > 1:
+            cycle_closure_time = travel_time(last_wp, first_wp, self.uav_speed)
 
-        total += travel_time(last_wp, depot, self.uav_speed)
+        total = (
+            outbound_time
+            + m_j * internal_sequence_time
+            + (m_j - 1) * cycle_closure_time
+            + return_time
+        )
+
         return total
 
 
     def _compute_m_j(self, sequence: List[Waypoint]) -> int:
         """
-        Compute the maximum number of repetitions (m_j) for a given sequence of waypoints such that the total tour time does not exceed MAX_FLIGHT_TIME.
+        Compute the maximum feasible number of repetitions m_j such that
+        _compute_tour_flight_time(sequence, m_j) <= max_flight_time.
         """
         if not sequence:
             return 0
@@ -146,12 +162,11 @@ class GreedyAllocator:
         first_wp = sequence[0]
         last_wp = sequence[-1]
 
-        depot_legs_time = (
-            travel_time(depot, first_wp, self.uav_speed)
-            + travel_time(last_wp, depot, self.uav_speed)
-        )
+        outbound_time = travel_time(depot, first_wp, self.uav_speed)
+        return_time = travel_time(last_wp, depot, self.uav_speed)
 
-        if depot_legs_time > self.max_flight_time:
+        fixed_time = outbound_time + return_time
+        if fixed_time > self.max_flight_time:
             return 0
 
         internal_sequence_time = sum(
@@ -163,14 +178,21 @@ class GreedyAllocator:
             return 1
 
         cycle_closure_time = travel_time(last_wp, first_wp, self.uav_speed)
-        repeated_cycle_time = internal_sequence_time + cycle_closure_time
 
-        if repeated_cycle_time <= 0:
-            return 1
+        per_extra_repetition_time = internal_sequence_time + cycle_closure_time
 
-        remaining_time = self.max_flight_time - depot_legs_time + cycle_closure_time
-        max_repetitions = int(remaining_time // repeated_cycle_time)
-        return max(max_repetitions, 1)
+        # First repetition requires:
+        # depot -> first + internal_sequence_time + last -> depot
+        first_repetition_time = fixed_time + internal_sequence_time
+
+        if first_repetition_time > self.max_flight_time:
+            return 0
+
+        remaining_time = self.max_flight_time - first_repetition_time
+
+        extra_repetitions = int(remaining_time // per_extra_repetition_time)
+
+        return 1 + max(extra_repetitions, 0)
 
 
     def _can_assign_target(self, uav: UAV, target_wp: Waypoint) -> bool:

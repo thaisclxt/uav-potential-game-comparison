@@ -4,23 +4,23 @@ project:
 
 simulation:
   seed: 32
-  number_runs: 100
-  use_external_waypoints: true # Set to true to use waypoints from Excel files in the waypoints directory, false to generate random waypoints based on the grid parameters.
-  generate_random_targets: false # Set to true to generate random target waypoints for each run, false to use fixed target waypoints defined in the settings.yaml file.
-  number_targets: 20 # In case we choose to generate random targets
+  number_runs: 8
+  use_external_waypoints: false # Set to true to use waypoints from Excel files in the waypoints directory, false to generate random waypoints based on the grid parameters.
+  generate_random_targets: true # Set to true to generate random target waypoints for each run, false to use fixed target waypoints defined in the settings.yaml file.
+  number_targets: 21 # In case we choose to generate random targets
 
 grid:
-  width: 13
-  height: 13
-  spacing: 92.608
+  width: 6
+  height: 6
+  spacing: 5
 
 depot:
   location: [0, 0]
 
 uav:
-  num_uavs: 2
-  speed: 16
-  max_flight_time: 1920
+  num_uavs: 4
+  speed: 10
+  max_flight_time: 50
 
 waypoints:
   fixed_target_indices: [2, 3, 5, 6, 7]

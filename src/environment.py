@@ -35,12 +35,12 @@ class GridEnvironment:
 
         if target_waypoints is not None:
             self.target_waypoints = target_waypoints
+            self.waypoints: List[Waypoint] = []
         else:
-            self.waypoints: List[Waypoint] = self.build_grid()
-            self.target_waypoints: List[Waypoint] = self.generate_target_waypoints()
+            self.waypoints = self.build_grid()
+            self.target_waypoints = self.generate_target_waypoints()
             self.assign_random_revenues()
-            self.print_summary()
-    
+
 
     def build_grid(self) -> List[Waypoint]:
         waypoints: List[Waypoint] = []
@@ -59,8 +59,7 @@ class GridEnvironment:
     def generate_target_waypoints(self) -> List[Waypoint]:
         if self.simulation.generate_random_targets:
             return random.sample(self.waypoints, self.simulation.number_targets)
-        else:
-            return [self.waypoints[i] for i in self.fixed_target_indices]
+        return [self.waypoints[i] for i in self.fixed_target_indices]
 
 
     def assign_random_revenues(self) -> None:
@@ -68,7 +67,7 @@ class GridEnvironment:
             wp.revenue = random.uniform(self.wp_min_revenue, self.wp_max_revenue)
 
 
-    def print_summary(self) -> None:
+    def print_static_summary(self) -> None:
         print(f"Depot at: ({self.depot.x}, {self.depot.y})\n")
 
         for wp in sorted(self.waypoints, key=lambda w: w.wid):
@@ -76,6 +75,3 @@ class GridEnvironment:
 
         print(f"\nTotal waypoints: {len(self.waypoints)}")
         print(f"Number of targets: {len(self.target_waypoints)}\n")
-
-        for wp in sorted(self.target_waypoints, key=lambda w: w.wid):
-            print(f"Waypoint target {wp.wid}: ({wp.x}, {wp.y}) with revenue {wp.revenue:.2f}")

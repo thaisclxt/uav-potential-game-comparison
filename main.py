@@ -2,10 +2,7 @@ from pathlib import Path
 
 from src.config import load_configuration
 from src.runner import run_simulation
-from src.visualization import (
-    generate_blockspot_gifs,
-    generate_uav_contribution_boxplots,
-)
+from src.visualization import generate_uav_contribution_boxplots
 
 
 def main() -> None:
@@ -27,16 +24,9 @@ def main() -> None:
         waypoint_files=waypoint_files,
     )
 
-    generate_blockspot_gifs(
-        outputs_dir=Path(project_cfg.outputs_dir),
-        waypoints_dir=Path(project_cfg.waypoints_dir),
-        uav_cfg=uav_cfg,
-    )
+    generate_uav_contribution_boxplots(Path(project_cfg.outputs_dir) / "greedy")
+    generate_uav_contribution_boxplots(Path(project_cfg.outputs_dir) / "cluster_ga")
 
-    generate_uav_contribution_boxplots(
-        outputs_dir=Path(project_cfg.outputs_dir),
-    )
 
-    
 if __name__ == "__main__":
     main()

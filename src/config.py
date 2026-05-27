@@ -13,7 +13,7 @@ class ProjectConfig:
 @dataclass
 class SimulationConfig:
     seed: int
-    n_runs: int
+    number_runs: int
     use_external_waypoints: bool
     generate_random_targets: bool
     number_targets: int
@@ -63,7 +63,7 @@ def load_configuration(path: Path):
 
     sim_cfg = SimulationConfig(
         seed=sim_d.get("seed"),
-        n_runs=sim_d.get("number_runs"),
+        number_runs=sim_d.get("number_runs"),
         use_external_waypoints=sim_d.get("use_external_waypoints"),
         generate_random_targets=sim_d.get("generate_random_targets"),
         number_targets=sim_d.get("number_targets"),
