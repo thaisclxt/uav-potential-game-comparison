@@ -118,7 +118,7 @@ def run_simulation(
     greedy_outputs_dir = base_outputs_dir / "greedy"
     cluster_ga_outputs_dir = base_outputs_dir / "cluster_ga"
 
-    if sim_cfg.use_external_waypoints:
+    if sim_cfg.scenario == "excel":
         for wp_file in waypoint_files:
             try:
                 n_uavs = extract_num_uavs(str(wp_file))
@@ -164,7 +164,8 @@ def run_simulation(
                     wp_base_revenue=wp_cfg.base_revenue,
                     wp_min_revenue=wp_cfg.min_revenue,
                     wp_max_revenue=wp_cfg.max_revenue,
-                    fixed_target_indices=wp_cfg.fixed_target_indices,
+                    number_targets=wp_cfg.number_targets,
+                    revenue_matrix=wp_cfg.revenue_matrix,
                 )
 
                 _run_one_environment(
@@ -203,7 +204,7 @@ def run_simulation(
 
     else:
         n_uavs = uav_cfg.num_uavs
-        grid_size = grid_cfg.width
+        grid_size = len(wp_cfg.revenue_matrix) if sim_cfg.scenario == "fixed" else grid_cfg.width
 
         _, greedy_revenue_dir, greedy_tour_dir, _ = prepare_scenario_outputs_dirs(
             outputs_dir=greedy_outputs_dir,
@@ -223,8 +224,8 @@ def run_simulation(
         clusterga_tour_sheets: List[pd.DataFrame] = []
 
         print(
-            f"\n=== Running config-based simulation "
-            f"(m = {n_uavs}, grid = {grid_cfg.width}x{grid_cfg.height}, runs = {sim_cfg.number_runs}) ==="
+            f"\n=== Running {sim_cfg.scenario} simulation "
+            f"(n_uavs={n_uavs}, grid={grid_size}x{grid_size}, runs={sim_cfg.number_runs}) ==="
         )
 
         summary_env = GridEnvironment(
@@ -238,7 +239,8 @@ def run_simulation(
             wp_base_revenue=wp_cfg.base_revenue,
             wp_min_revenue=wp_cfg.min_revenue,
             wp_max_revenue=wp_cfg.max_revenue,
-            fixed_target_indices=wp_cfg.fixed_target_indices,
+            number_targets=wp_cfg.number_targets,
+            revenue_matrix=wp_cfg.revenue_matrix,
         )
         summary_env.print_static_summary()
 
@@ -256,7 +258,8 @@ def run_simulation(
                 wp_base_revenue=wp_cfg.base_revenue,
                 wp_min_revenue=wp_cfg.min_revenue,
                 wp_max_revenue=wp_cfg.max_revenue,
-                fixed_target_indices=wp_cfg.fixed_target_indices,
+                revenue_matrix=wp_cfg.revenue_matrix,
+                number_targets=wp_cfg.number_targets,
             )
 
             _run_one_environment(

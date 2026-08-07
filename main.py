@@ -11,7 +11,7 @@ def main() -> None:
     project_cfg, sim_cfg, grid_cfg, uav_cfg, wp_cfg = load_configuration(settings_path)
 
     waypoint_files = []
-    if sim_cfg.use_external_waypoints:
+    if sim_cfg.scenario == "excel":
         waypoints_dir = Path(project_cfg.waypoints_dir)
         waypoint_files = sorted(waypoints_dir.rglob("*_waypoints.xlsx"))
 
@@ -24,8 +24,11 @@ def main() -> None:
         waypoint_files=waypoint_files,
     )
 
-    generate_uav_contribution_boxplots(Path(project_cfg.outputs_dir) / "greedy")
-    generate_uav_contribution_boxplots(Path(project_cfg.outputs_dir) / "cluster_ga")
+    # generate_uav_contribution_boxplots(Path(project_cfg.outputs_dir) / "greedy")
+    # generate_uav_contribution_boxplots(Path(project_cfg.outputs_dir) / "cluster_ga")
+    # generate_uav_contribution_boxplots(Path(project_cfg.outputs_dir) / "IRADA")
+    # generate_uav_contribution_boxplots(Path(project_cfg.outputs_dir) / "non_overlap")
+    # generate_uav_contribution_boxplots(Path(project_cfg.outputs_dir) / "overlap")
 
 
 if __name__ == "__main__":

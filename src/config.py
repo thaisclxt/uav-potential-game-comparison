@@ -14,9 +14,7 @@ class ProjectConfig:
 class SimulationConfig:
     seed: int
     number_runs: int
-    use_external_waypoints: bool
-    generate_random_targets: bool
-    number_targets: int
+    scenario: str
 
     def __post_init__(self) -> None:
         random.seed(self.seed)
@@ -39,11 +37,11 @@ class UAVConfig:
 
 @dataclass
 class WaypointConfig:
-    fixed_target_indices: list[int]
+    number_targets: int
     base_revenue: float
     min_revenue: float
     max_revenue: float
-
+    revenue_matrix: list[list[float]]
 
 def load_configuration(path: Path):
     with open(path, "r") as f:
@@ -64,9 +62,7 @@ def load_configuration(path: Path):
     sim_cfg = SimulationConfig(
         seed=sim_d.get("seed"),
         number_runs=sim_d.get("number_runs"),
-        use_external_waypoints=sim_d.get("use_external_waypoints"),
-        generate_random_targets=sim_d.get("generate_random_targets"),
-        number_targets=sim_d.get("number_targets"),
+        scenario=sim_d.get("scenario"),
     )
 
     grid_cfg = GridConfig(
@@ -83,10 +79,11 @@ def load_configuration(path: Path):
     )
 
     wp_cfg = WaypointConfig(
-        fixed_target_indices=wp_d.get("fixed_target_indices"),
+        number_targets=wp_d.get("number_targets"),
         base_revenue=wp_d.get("base_revenue"),
         min_revenue=wp_d.get("min_revenue"),
         max_revenue=wp_d.get("max_revenue"),
+        revenue_matrix=wp_d.get("revenue_matrix"),
     )
 
     return project_cfg, sim_cfg, grid_cfg, uav_cfg, wp_cfg

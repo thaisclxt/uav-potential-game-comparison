@@ -1,5 +1,4 @@
 import random
-
 from typing import List, Optional, Tuple, Union
 
 from src.environment import GridEnvironment
@@ -22,105 +21,48 @@ class GreedyAllocator:
 
         self.uavs: List[UAV] = [UAV(uid=i) for i in range(self.num_uavs)]
 
-
     def solve(self) -> Tuple[List[UAV], List[Waypoint], float, float]:
-        """
-        Run the greedy assignment algorithm and return the final UAV assignments, unassigned targets, total revenue, and total revenue rate.
-        """
         self.reset()
         uavs, unassigned_targets = self._assign_targets_greedily()
         total_revenue = self.compute_total_revenue_all()
         total_revenue_rate = self.compute_total_revenue_rate_all()
         return uavs, unassigned_targets, total_revenue, total_revenue_rate
 
-
     def reset(self) -> None:
-        """
-        Reset all UAVs to their initial state (empty sequence and m_j = 0) for a new simulation run.
-        """
         for uav in self.uavs:
             uav.reset()
 
-
     def build_tour(self, uav: UAV) -> List[Union[Depot, Waypoint]]:
-        """
-        Build the full tour for a UAV based on its assigned sequence and number of repetitions.
-        The tour starts and ends at the depot, and visits the waypoints in the sequence m_j times.
-        """
         if not uav.sequence or uav.m_j <= 0:
             return [self.environment.depot]
         return [self.environment.depot] + (uav.sequence * uav.m_j) + [self.environment.depot]
 
-
     def current_tour_time(self, uav: UAV) -> float:
-        """
-        Compute the current tour flight time for a UAV based on its assigned sequence and number of repetitions.
-        """
         if not uav.sequence or uav.m_j <= 0:
             return 0.0
         return self._compute_tour_flight_time(uav.sequence, uav.m_j)
 
-
     def compute_sequence_revenue(self, sequence: List[Waypoint]) -> float:
-        """
-        Compute the total revenue of a sequence of waypoints by summing their individual revenues.
-        """
         return sum(wp.revenue for wp in sequence)
 
-
     def compute_total_revenue(self, uav: UAV) -> float:
-        """
-        Compute the total revenue for a UAV based on its assigned sequence and number of repetitions.
-        The total revenue is the revenue of the sequence multiplied by the number of repetitions (m_j).
-        """
         if not uav.sequence or uav.m_j <= 0:
             return 0.0
         return uav.m_j * self.compute_sequence_revenue(uav.sequence)
 
-
-    def compute_monitoring_frequency(self, uav: UAV) -> float:
-        """
-        Compute the monitoring frequency for a UAV based on its assigned sequence and number of repetitions.
-        """
+    def compute_revenue_rate(self, uav: UAV) -> float:
         t_j = self.current_tour_time(uav)
         if t_j <= 0.0:
             return 0.0
-        return (uav.m_j * self.uav_speed) / t_j
-
-
-    def compute_revenue_rate(self, uav: UAV) -> float:
-        """
-        Compute the revenue rate for a UAV as the product of its monitoring frequency and total revenue.
-        """
-        return self.compute_monitoring_frequency(uav) * self.compute_total_revenue(uav)
-
+        return self.compute_total_revenue(uav) / t_j
 
     def compute_total_revenue_all(self) -> float:
-        """
-        Compute the total revenue across all UAVs by summing their individual total revenues.
-        """
         return sum(self.compute_total_revenue(uav) for uav in self.uavs)
 
-
     def compute_total_revenue_rate_all(self) -> float:
-        """
-        Compute the total revenue rate across all UAVs by summing their individual revenue rates.
-        """
         return sum(self.compute_revenue_rate(uav) for uav in self.uavs)
 
-
     def _compute_tour_flight_time(self, sequence: List[Waypoint], m_j: int) -> float:
-        """
-        Compute the total flight time of a repeated tour:
-        depot -> sequence repeated m_j times -> depot
-
-        For m_j >= 1:
-        total =
-            depot -> first
-            + m_j * (internal sequence traversal)
-            + (m_j - 1) * (last -> first cycle closure)
-            + last -> depot
-        """
         if not sequence or m_j <= 0:
             return 0.0
 
@@ -149,12 +91,7 @@ class GreedyAllocator:
 
         return total
 
-
     def _compute_m_j(self, sequence: List[Waypoint]) -> int:
-        """
-        Compute the maximum feasible number of repetitions m_j such that
-        _compute_tour_flight_time(sequence, m_j) <= max_flight_time.
-        """
         if not sequence:
             return 0
 
@@ -175,84 +112,73 @@ class GreedyAllocator:
         )
 
         if len(sequence) == 1:
-            return 1
+            round_trip = 2.0 * outbound_time
+            if round_trip > self.max_flight_time:
+                return 0
+            return int(self.max_flight_time // round_trip)
 
         cycle_closure_time = travel_time(last_wp, first_wp, self.uav_speed)
-
         per_extra_repetition_time = internal_sequence_time + cycle_closure_time
 
-        # First repetition requires:
-        # depot -> first + internal_sequence_time + last -> depot
         first_repetition_time = fixed_time + internal_sequence_time
-
         if first_repetition_time > self.max_flight_time:
             return 0
 
         remaining_time = self.max_flight_time - first_repetition_time
-
         extra_repetitions = int(remaining_time // per_extra_repetition_time)
 
         return 1 + max(extra_repetitions, 0)
 
-
     def _can_assign_target(self, uav: UAV, target_wp: Waypoint) -> bool:
-        """
-        Check if assigning the target waypoint to the UAV's sequence would still allow for a feasible tour (m_j >= 1).
-        """
         trial_sequence = uav.sequence + [target_wp]
         trial_m_j = self._compute_m_j(trial_sequence)
         return trial_m_j >= 1
 
-
-    def _find_nearest_feasible_target(
-        self,
-        uav: UAV,
-        unassigned_targets: List[Waypoint],
-    ) -> Optional[Waypoint]:
-        """
-        Find the nearest unassigned target waypoint that can be feasibly assigned to the UAV's sequence without exceeding MAX_FLIGHT_TIME.
-        """
-        if not unassigned_targets:
-            return None
-
-        current_location = uav.sequence[-1] if uav.sequence else self.environment.depot
-        feasible_targets = [wp for wp in unassigned_targets if self._can_assign_target(uav, wp)]
-
-        if not feasible_targets:
-            return None
-
-        min_distance = min(euclidean_distance(current_location, wp) for wp in feasible_targets)
-        candidates = [
-            wp for wp in feasible_targets
-            if euclidean_distance(current_location, wp) == min_distance
-        ]
-        return random.choice(candidates)
-
-
-    def _select_uav_with_min_tour_time(self) -> UAV:
-        """
-        Select the UAV with the minimum current tour time. If multiple UAVs have the same minimum tour time, select one randomly among them.
-        """
-        min_time = min(self.current_tour_time(uav) for uav in self.uavs)
-        candidates = [uav for uav in self.uavs if self.current_tour_time(uav) == min_time]
-        return random.choice(candidates)
-
-
     def _assign_targets_greedily(self) -> Tuple[List[UAV], List[Waypoint]]:
-        """
-        Greedily assign target waypoints to UAVs by repeatedly selecting the UAV with the minimum current tour time and assigning it the nearest feasible target waypoint until no more assignments are possible.
-        """
         unassigned_targets = self.environment.target_waypoints.copy()
 
         while unassigned_targets:
-            selected_uav = self._select_uav_with_min_tour_time()
-            nearest_target = self._find_nearest_feasible_target(selected_uav, unassigned_targets)
+            made_assignment = False
 
-            if nearest_target is None:
+            for uav in self.uavs:
+                if not unassigned_targets:
+                    break
+
+                best_target: Optional[Waypoint] = None
+                best_rate = -1.0
+
+                # All targets are positive-revenue by construction
+                feasible = [
+                    wp for wp in unassigned_targets
+                    if self._can_assign_target(uav, wp)
+                ]
+
+                for target in feasible:
+                    trial_sequence = uav.sequence + [target]
+                    trial_m_j = self._compute_m_j(trial_sequence)
+
+                    old_sequence = uav.sequence.copy()
+                    old_m_j = uav.m_j
+
+                    uav.sequence = trial_sequence
+                    uav.m_j = trial_m_j
+
+                    new_rate = self.compute_revenue_rate(uav)
+
+                    uav.sequence = old_sequence
+                    uav.m_j = old_m_j
+
+                    if new_rate > best_rate:
+                        best_rate = new_rate
+                        best_target = target
+
+                if best_target is not None:
+                    uav.sequence.append(best_target)
+                    uav.m_j = self._compute_m_j(uav.sequence)
+                    unassigned_targets.remove(best_target)
+                    made_assignment = True
+
+            if not made_assignment:
                 break
-
-            selected_uav.sequence.append(nearest_target)
-            selected_uav.m_j = self._compute_m_j(selected_uav.sequence)
-            unassigned_targets.remove(nearest_target)
 
         return self.uavs, unassigned_targets
