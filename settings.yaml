@@ -6,11 +6,11 @@ project:
 simulation:
   seed: 32
   number_runs: 1
-  scenario: fixed # fixed | random | excel
+  scenario: excel # fixed | random | excel
 
 grid:
-  # spacing: 92.608
-  spacing: 60
+  spacing: 92.608
+  # spacing: 60
 
   # Used only when scenario = random or excel
   width: 3
@@ -20,10 +20,10 @@ depot:
   location: [0, 0]
 
 uav:
-  # speed: 16
-  # max_flight_time: 1920
-  speed: 1
-  max_flight_time: 600
+  speed: 16
+  max_flight_time: 1920
+  # speed: 1
+  # max_flight_time: 600
 
   # Used only when scenario = fixed or random
   num_uavs: 2

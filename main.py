@@ -24,8 +24,8 @@ def main() -> None:
         waypoint_files=waypoint_files,
     )
 
-    # generate_uav_contribution_boxplots(Path(project_cfg.outputs_dir) / "greedy")
-    # generate_uav_contribution_boxplots(Path(project_cfg.outputs_dir) / "cluster_ga")
+    generate_uav_contribution_boxplots(Path(project_cfg.outputs_dir) / "greedy")
+    generate_uav_contribution_boxplots(Path(project_cfg.outputs_dir) / "cluster_ga")
     # generate_uav_contribution_boxplots(Path(project_cfg.outputs_dir) / "IRADA")
     # generate_uav_contribution_boxplots(Path(project_cfg.outputs_dir) / "non_overlap")
     # generate_uav_contribution_boxplots(Path(project_cfg.outputs_dir) / "overlap")
