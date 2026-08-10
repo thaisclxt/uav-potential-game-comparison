@@ -1,11 +1,11 @@
 project:
   outputs_dir: results
-  # waypoints_dir: waypoints
-  waypoints_dir: aaaaaaaaa
+  waypoints_dir: waypoints
+  # waypoints_dir: aaaaaaaaa
 
 simulation:
-  seed: 32
-  number_runs: 1
+  seed: 42
+  number_runs: 100
   scenario: excel # fixed | random | excel
 
 grid:

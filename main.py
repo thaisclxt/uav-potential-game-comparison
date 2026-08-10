@@ -2,7 +2,6 @@ from pathlib import Path
 
 from src.config import load_configuration
 from src.runner import run_simulation
-from src.visualization import generate_uav_contribution_boxplots
 
 
 def main() -> None:
@@ -23,12 +22,6 @@ def main() -> None:
         wp_cfg=wp_cfg,
         waypoint_files=waypoint_files,
     )
-
-    generate_uav_contribution_boxplots(Path(project_cfg.outputs_dir) / "greedy")
-    generate_uav_contribution_boxplots(Path(project_cfg.outputs_dir) / "cluster_ga")
-    # generate_uav_contribution_boxplots(Path(project_cfg.outputs_dir) / "IRADA")
-    # generate_uav_contribution_boxplots(Path(project_cfg.outputs_dir) / "non_overlap")
-    # generate_uav_contribution_boxplots(Path(project_cfg.outputs_dir) / "overlap")
 
 
 if __name__ == "__main__":
