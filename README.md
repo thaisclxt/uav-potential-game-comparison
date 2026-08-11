@@ -110,12 +110,16 @@ openpyxl
 ## Running experiments
 
 1. Configure the desired number of UAVs, speed, maximum flight time, number of runs, and enabled algorithms in `settings.yaml`.
-2. Run the simulation entry point.
+2. Run the simulation independently.
 3. Run the analysis scripts to create revenue-rate, revenue-share, and flight-time-left plots.
 
 Example commands:
 
 ```bash
-python main.py
+python main.py --algorithm greedy
+python main.py --algorithm cluster_ga
+
 python revenue_rate_comparison.py
+python per_uav_revenue_share_comparisons.py
+python flight_time_left_comparison.py
 ```
