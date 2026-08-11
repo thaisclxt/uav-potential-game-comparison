@@ -7,135 +7,223 @@ from src.utils import travel_time
 
 
 class ClusterGAAllocator:
+    """
+    Paper-inspired Cluster + GA allocator.
+
+    Adaptations retained for this project:
+    - Uses positive-revenue targets only.
+    - Sets k = num_uavs.
+    - Uses revenue rate as GA fitness.
+    - Uses repeated tours and requires m_j >= 1.
+
+    Paper-inspired structure:
+    - K-means creates fixed task clusters.
+    - One cluster is assigned to one UAV.
+    - One independent GA optimizes route order inside each cluster.
+    - GA never transfers or swaps waypoints between UAVs.
+    """
+
     def __init__(
         self,
         environment: GridEnvironment,
         num_uavs: int,
         uav_speed: float,
         max_flight_time: float,
-        population_size: int = 50,
-        generations: int = 100,
-        order_mutation_rate: float = 0.35,
-        transfer_mutation_rate: float = 0.20,
-        swap_uav_mutation_rate: float = 0.15,
+        population_size: int = 20, #80
+        generations: int = 100, #5000
+        crossover_probability: float = 0.60,
+        mutation_probability: float = 0.05,
         random_state: Optional[int] = 42,
     ) -> None:
         self.environment = environment
         self.num_uavs = num_uavs
         self.uav_speed = uav_speed
         self.max_flight_time = max_flight_time
+
+        # Paper values
         self.population_size = population_size
         self.generations = generations
-        self.order_mutation_rate = order_mutation_rate
-        self.transfer_mutation_rate = transfer_mutation_rate
-        self.swap_uav_mutation_rate = swap_uav_mutation_rate
+        self.crossover_probability = crossover_probability
+        self.mutation_probability = mutation_probability
+
         self.rng = random.Random(random_state)
 
-        self.uavs: List[UAV] = [UAV(uid=i) for i in range(self.num_uavs)]
+        self.uavs: List[UAV] = [
+            UAV(uid=i)
+            for i in range(self.num_uavs)
+        ]
 
     def solve(self) -> Tuple[List[UAV], List[Waypoint], float, float]:
+        """
+        1. Keep only positive-revenue targets.
+        2. Use K-means with k = num_uavs.
+        3. Assign one fixed cluster to each UAV.
+        4. Run one order-only GA for each cluster.
+        5. Reject final routes whose m_j < 1.
+        """
         self.reset()
-        targets = self.environment.target_waypoints.copy()
 
-        if self.num_uavs == 0 or not targets:
-            return self.uavs, targets, 0.0, 0.0
+        targets = [
+            wp
+            for wp in self.environment.target_waypoints
+            if wp.revenue > 0
+        ]
 
-        initial_candidate = self._initial_candidate(targets)
-        population = self._initial_population(initial_candidate)
+        if not targets:
+            return self.uavs, [], 0.0, 0.0
 
-        best_candidate = self._copy_candidate(initial_candidate)
-        best_fitness = self._fitness(best_candidate)
+        clusters = self._kmeans_clusters(
+            targets=targets,
+            k=self.num_uavs,
+        )
 
-        for _ in range(self.generations):
-            scored_population = [
-                (self._fitness(candidate), candidate)
-                for candidate in population
-            ]
-            scored_population.sort(key=lambda item: item[0], reverse=True)
+        for uav_index, uav in enumerate(self.uavs):
+            cluster = clusters[uav_index]
 
-            if scored_population[0][0] > best_fitness:
-                best_fitness = scored_population[0][0]
-                best_candidate = self._copy_candidate(scored_population[0][1])
+            if not cluster:
+                continue
 
-            elite_count = max(1, self.population_size // 10)
-            next_population = [
-                self._copy_candidate(candidate)
-                for _, candidate in scored_population[:elite_count]
-            ]
+            best_sequence = self._ga_optimize_cluster(cluster)
+            m_j = self._compute_m_j(best_sequence)
 
-            while len(next_population) < self.population_size:
-                parent = self._tournament_select(scored_population)
-                next_population.append(self._mutate(parent))
+            # Fixed cluster remains unassigned if no feasible route order exists.
+            if m_j < 1:
+                continue
 
-            population = next_population
+            uav.sequence = best_sequence
+            uav.m_j = m_j
 
-        self._apply_candidate(best_candidate)
         assigned_ids = {
             id(wp)
-            for route in best_candidate
-            for wp in route
+            for uav in self.uavs
+            for wp in uav.sequence
         }
+
         unassigned_targets = [
-            wp for wp in targets
+            wp
+            for wp in targets
             if id(wp) not in assigned_ids
         ]
 
         total_revenue = self.compute_total_revenue_all()
         total_revenue_rate = self.compute_total_revenue_rate_all()
-        return self.uavs, unassigned_targets, total_revenue, total_revenue_rate
+
+        return (
+            self.uavs,
+            unassigned_targets,
+            total_revenue,
+            total_revenue_rate,
+        )
 
     def reset(self) -> None:
         for uav in self.uavs:
             uav.reset()
 
-    def build_tour(self, uav: UAV) -> List[Union[Depot, Waypoint]]:
+    # ============================================================
+    # Output and revenue helpers
+    # ============================================================
+
+    def build_tour(
+        self,
+        uav: UAV,
+    ) -> List[Union[Depot, Waypoint]]:
         if not uav.sequence or uav.m_j <= 0:
             return [self.environment.depot]
-        return [self.environment.depot] + (uav.sequence * uav.m_j) + [self.environment.depot]
+
+        return (
+            [self.environment.depot]
+            + (uav.sequence * uav.m_j)
+            + [self.environment.depot]
+        )
 
     def current_tour_time(self, uav: UAV) -> float:
         if not uav.sequence or uav.m_j <= 0:
             return 0.0
-        return self._compute_tour_flight_time(uav.sequence, uav.m_j)
 
-    def compute_sequence_revenue(self, sequence: List[Waypoint]) -> float:
+        return self._compute_tour_flight_time(
+            uav.sequence,
+            uav.m_j,
+        )
+
+    def compute_sequence_revenue(
+        self,
+        sequence: List[Waypoint],
+    ) -> float:
         return sum(wp.revenue for wp in sequence)
 
     def compute_total_revenue(self, uav: UAV) -> float:
         if not uav.sequence or uav.m_j <= 0:
             return 0.0
-        return uav.m_j * self.compute_sequence_revenue(uav.sequence)
+
+        return (
+            uav.m_j
+            * self.compute_sequence_revenue(uav.sequence)
+        )
 
     def compute_revenue_rate(self, uav: UAV) -> float:
         tour_time = self.current_tour_time(uav)
+
         if tour_time <= 0.0:
             return 0.0
+
         return self.compute_total_revenue(uav) / tour_time
 
     def compute_total_revenue_all(self) -> float:
-        return sum(self.compute_total_revenue(uav) for uav in self.uavs)
+        return sum(
+            self.compute_total_revenue(uav)
+            for uav in self.uavs
+        )
 
     def compute_total_revenue_rate_all(self) -> float:
-        return sum(self.compute_revenue_rate(uav) for uav in self.uavs)
+        return sum(
+            self.compute_revenue_rate(uav)
+            for uav in self.uavs
+        )
 
-    def _compute_tour_flight_time(self, sequence: List[Waypoint], m_j: int) -> float:
+    # ============================================================
+    # Repeated-tour calculations
+    # ============================================================
+
+    def _compute_tour_flight_time(
+        self,
+        sequence: List[Waypoint],
+        m_j: int,
+    ) -> float:
         if not sequence or m_j <= 0:
             return 0.0
 
         depot = self.environment.depot
         first_wp = sequence[0]
         last_wp = sequence[-1]
-        outbound_time = travel_time(depot, first_wp, self.uav_speed)
-        return_time = travel_time(last_wp, depot, self.uav_speed)
+
+        outbound_time = travel_time(
+            depot,
+            first_wp,
+            self.uav_speed,
+        )
+
+        return_time = travel_time(
+            last_wp,
+            depot,
+            self.uav_speed,
+        )
+
         internal_sequence_time = sum(
             travel_time(wp_a, wp_b, self.uav_speed)
-            for wp_a, wp_b in zip(sequence[:-1], sequence[1:])
+            for wp_a, wp_b in zip(
+                sequence[:-1],
+                sequence[1:],
+            )
         )
-        cycle_closure_time = (
-            travel_time(last_wp, first_wp, self.uav_speed)
-            if len(sequence) > 1
-            else 0.0
-        )
+
+        cycle_closure_time = 0.0
+
+        if len(sequence) > 1:
+            cycle_closure_time = travel_time(
+                last_wp,
+                first_wp,
+                self.uav_speed,
+            )
 
         return (
             outbound_time
@@ -144,15 +232,29 @@ class ClusterGAAllocator:
             + return_time
         )
 
-    def _compute_m_j(self, sequence: List[Waypoint]) -> int:
+    def _compute_m_j(
+        self,
+        sequence: List[Waypoint],
+    ) -> int:
         if not sequence:
             return 0
 
         depot = self.environment.depot
         first_wp = sequence[0]
         last_wp = sequence[-1]
-        outbound_time = travel_time(depot, first_wp, self.uav_speed)
-        return_time = travel_time(last_wp, depot, self.uav_speed)
+
+        outbound_time = travel_time(
+            depot,
+            first_wp,
+            self.uav_speed,
+        )
+
+        return_time = travel_time(
+            last_wp,
+            depot,
+            self.uav_speed,
+        )
+
         fixed_time = outbound_time + return_time
 
         if fixed_time > self.max_flight_time:
@@ -160,290 +262,350 @@ class ClusterGAAllocator:
 
         if len(sequence) == 1:
             round_trip = 2.0 * outbound_time
-            return int(self.max_flight_time // round_trip) if round_trip > 0 else 0
+
+            if round_trip <= 0.0:
+                return 0
+
+            if round_trip > self.max_flight_time:
+                return 0
+
+            return int(
+                self.max_flight_time // round_trip
+            )
 
         internal_sequence_time = sum(
             travel_time(wp_a, wp_b, self.uav_speed)
-            for wp_a, wp_b in zip(sequence[:-1], sequence[1:])
+            for wp_a, wp_b in zip(
+                sequence[:-1],
+                sequence[1:],
+            )
         )
-        cycle_closure_time = travel_time(last_wp, first_wp, self.uav_speed)
-        first_repetition_time = fixed_time + internal_sequence_time
+
+        cycle_closure_time = travel_time(
+            last_wp,
+            first_wp,
+            self.uav_speed,
+        )
+
+        first_repetition_time = (
+            fixed_time
+            + internal_sequence_time
+        )
 
         if first_repetition_time > self.max_flight_time:
             return 0
 
-        extra_repetition_time = internal_sequence_time + cycle_closure_time
-        remaining_time = self.max_flight_time - first_repetition_time
-        extra_repetitions = int(remaining_time // extra_repetition_time)
+        extra_repetition_time = (
+            internal_sequence_time
+            + cycle_closure_time
+        )
+
+        remaining_time = (
+            self.max_flight_time
+            - first_repetition_time
+        )
+
+        extra_repetitions = int(
+            remaining_time // extra_repetition_time
+        )
+
         return 1 + max(extra_repetitions, 0)
 
-    def _initial_candidate(self, targets: List[Waypoint]) -> List[List[Waypoint]]:
-        candidate = self._kmeans_clusters(targets)
-        repaired_candidate, _ = self._repair_candidate(candidate)
-        return repaired_candidate
-
-    def _kmeans_clusters(self, targets: List[Waypoint]) -> List[List[Waypoint]]:
-        clusters: List[List[Waypoint]] = [[] for _ in range(self.num_uavs)]
-        k = min(self.num_uavs, len(targets))
-        if k == 0:
-            return clusters
-
-        centroids = self._kmeans_plus_plus_centroids(targets, k)
-
-        for _ in range(100):
-            new_clusters = [[] for _ in range(k)]
-            for waypoint in targets:
-                cluster_idx = min(
-                    range(k),
-                    key=lambda idx: self._squared_distance(
-                        (waypoint.x, waypoint.y), centroids[idx]
-                    ),
-                )
-                new_clusters[cluster_idx].append(waypoint)
-
-            new_centroids = []
-            for idx, cluster in enumerate(new_clusters):
-                if cluster:
-                    new_centroids.append((
-                        sum(wp.x for wp in cluster) / len(cluster),
-                        sum(wp.y for wp in cluster) / len(cluster),
-                    ))
-                else:
-                    new_centroids.append(centroids[idx])
-
-            clusters[:k] = new_clusters
-            if new_centroids == centroids:
-                break
-            centroids = new_centroids
-
-        return clusters
-
-    def _kmeans_plus_plus_centroids(
-        self,
-        targets: List[Waypoint],
-        k: int,
-    ) -> List[Tuple[float, float]]:
-        first = self.rng.choice(targets)
-        centroids = [(float(first.x), float(first.y))]
-
-        while len(centroids) < k:
-            weights = [
-                min(
-                    self._squared_distance((wp.x, wp.y), centroid)
-                    for centroid in centroids
-                )
-                for wp in targets
-            ]
-            total_weight = sum(weights)
-
-            if total_weight <= 0.0:
-                remaining = [wp for wp in targets if (wp.x, wp.y) not in centroids]
-                chosen = self.rng.choice(remaining or targets)
-            else:
-                threshold = self.rng.random() * total_weight
-                cumulative = 0.0
-                chosen = targets[-1]
-                for waypoint, weight in zip(targets, weights):
-                    cumulative += weight
-                    if cumulative >= threshold:
-                        chosen = waypoint
-                        break
-
-            centroids.append((float(chosen.x), float(chosen.y)))
-
-        return centroids
+    # ============================================================
+    # K-means: fixed clusters, k = num_uavs
+    # ============================================================
 
     @staticmethod
     def _squared_distance(
         point_a: Tuple[float, float],
         point_b: Tuple[float, float],
     ) -> float:
-        return (point_a[0] - point_b[0]) ** 2 + (point_a[1] - point_b[1]) ** 2
-
-    def _initial_population(
-        self,
-        seed_candidate: List[List[Waypoint]],
-    ) -> List[List[List[Waypoint]]]:
-        population = [self._copy_candidate(seed_candidate)]
-
-        while len(population) < self.population_size:
-            candidate = self._copy_candidate(seed_candidate)
-            for route in candidate:
-                self.rng.shuffle(route)
-
-            for _ in range(self.rng.randint(1, 4)):
-                candidate = self._mutate(candidate)
-
-            population.append(candidate)
-
-        return population
-
-    def _mutate(self, candidate: List[List[Waypoint]]) -> List[List[Waypoint]]:
-        child = self._copy_candidate(candidate)
-        roll = self.rng.random()
-
-        if roll < self.order_mutation_rate:
-            self._order_mutation(child)
-        elif roll < self.order_mutation_rate + self.transfer_mutation_rate:
-            self._transfer_mutation(child)
-        elif roll < (
-            self.order_mutation_rate
-            + self.transfer_mutation_rate
-            + self.swap_uav_mutation_rate
-        ):
-            self._swap_uav_mutation(child)
-        else:
-            self._order_mutation(child)
-
-        return child if self._is_feasible(child) else self._copy_candidate(candidate)
-
-    def _order_mutation(self, candidate: List[List[Waypoint]]) -> None:
-        eligible_routes = [route for route in candidate if len(route) >= 2]
-        if not eligible_routes:
-            return
-
-        route = self.rng.choice(eligible_routes)
-        first_idx, second_idx = self.rng.sample(range(len(route)), 2)
-        route[first_idx], route[second_idx] = route[second_idx], route[first_idx]
-
-    def _transfer_mutation(self, candidate: List[List[Waypoint]]) -> None:
-        source_indices = [idx for idx, route in enumerate(candidate) if route]
-        if not source_indices or len(candidate) < 2:
-            return
-
-        source_idx = self.rng.choice(source_indices)
-        destination_idx = self.rng.choice([
-            idx for idx in range(len(candidate)) if idx != source_idx
-        ])
-        source_route = candidate[source_idx]
-        destination_route = candidate[destination_idx]
-        waypoint = source_route.pop(self.rng.randrange(len(source_route)))
-        destination_route.insert(self.rng.randrange(len(destination_route) + 1), waypoint)
-
-    def _swap_uav_mutation(self, candidate: List[List[Waypoint]]) -> None:
-        nonempty_indices = [idx for idx, route in enumerate(candidate) if route]
-        if len(nonempty_indices) < 2:
-            return
-
-        first_uav, second_uav = self.rng.sample(nonempty_indices, 2)
-        first_route = candidate[first_uav]
-        second_route = candidate[second_uav]
-        first_idx = self.rng.randrange(len(first_route))
-        second_idx = self.rng.randrange(len(second_route))
-        first_route[first_idx], second_route[second_idx] = (
-            second_route[second_idx],
-            first_route[first_idx],
+        return (
+            (point_a[0] - point_b[0]) ** 2
+            + (point_a[1] - point_b[1]) ** 2
         )
 
-    def _repair_candidate(
+    def _kmeans_clusters(
         self,
-        candidate: List[List[Waypoint]],
-    ) -> Tuple[List[List[Waypoint]], List[Waypoint]]:
-        candidate = self._copy_candidate(candidate)
-        deferred: List[Waypoint] = []
+        targets: List[Waypoint],
+        k: int,
+    ) -> List[List[Waypoint]]:
+        """
+        Standard K-means.
 
-        for route in candidate:
-            while route and self._compute_m_j(route) < 1:
-                deferred.append(route.pop(self._best_removal_index(route)))
+        Initial centroids are distinct target locations chosen randomly.
+        This is closer to the paper than K-means++ initialization.
+        """
+        clusters: List[List[Waypoint]] = [
+            []
+            for _ in range(self.num_uavs)
+        ]
 
-        still_unassigned: List[Waypoint] = []
-        for waypoint in deferred:
-            best_trial: Optional[List[List[Waypoint]]] = None
-            best_fitness = float("-inf")
+        if not targets:
+            return clusters
 
-            for route_idx, route in enumerate(candidate):
-                for insert_idx in range(len(route) + 1):
-                    trial = self._copy_candidate(candidate)
-                    trial[route_idx].insert(insert_idx, waypoint)
-                    if not self._is_feasible(trial):
-                        continue
-                    trial_fitness = self._fitness(trial)
-                    if trial_fitness > best_fitness:
-                        best_fitness = trial_fitness
-                        best_trial = trial
+        active_k = min(k, len(targets))
 
-            if best_trial is None:
-                still_unassigned.append(waypoint)
-            else:
-                candidate = best_trial
+        initial_waypoints = self.rng.sample(
+            targets,
+            active_k,
+        )
 
-        return candidate, still_unassigned
+        centroids: List[Tuple[float, float]] = [
+            (float(wp.x), float(wp.y))
+            for wp in initial_waypoints
+        ]
 
-    def _best_removal_index(self, route: List[Waypoint]) -> int:
-        best_idx = 0
-        best_score = float("-inf")
+        active_clusters: List[List[Waypoint]] = [
+            []
+            for _ in range(active_k)
+        ]
 
-        for idx in range(len(route)):
-            trial_route = route[:idx] + route[idx + 1:]
-            if not trial_route:
-                return idx
+        for _ in range(100):
+            new_clusters: List[List[Waypoint]] = [
+                []
+                for _ in range(active_k)
+            ]
 
-            m_j = self._compute_m_j(trial_route)
-            if m_j < 1:
-                score = float("-inf")
-            else:
-                tour_time = self._compute_tour_flight_time(trial_route, m_j)
-                score = m_j * self.compute_sequence_revenue(trial_route) / tour_time
+            # Assign every waypoint to nearest centroid.
+            for waypoint in targets:
+                cluster_index = min(
+                    range(active_k),
+                    key=lambda index: self._squared_distance(
+                        (waypoint.x, waypoint.y),
+                        centroids[index],
+                    ),
+                )
 
-            if score > best_score:
-                best_score = score
-                best_idx = idx
+                new_clusters[cluster_index].append(waypoint)
 
-        return best_idx
+            # Recalculate centroid as mean target location.
+            new_centroids: List[Tuple[float, float]] = []
 
-    def _is_feasible(self, candidate: List[List[Waypoint]]) -> bool:
-        seen_ids = set()
+            for index, cluster in enumerate(new_clusters):
+                if not cluster:
+                    new_centroids.append(centroids[index])
+                    continue
 
-        for route in candidate:
-            if not route:
-                continue
-            if self._compute_m_j(route) < 1:
-                return False
+                new_centroids.append(
+                    (
+                        sum(wp.x for wp in cluster) / len(cluster),
+                        sum(wp.y for wp in cluster) / len(cluster),
+                    )
+                )
 
-            for waypoint in route:
-                waypoint_id = id(waypoint)
-                if waypoint_id in seen_ids:
-                    return False
-                seen_ids.add(waypoint_id)
+            active_clusters = new_clusters
 
-        return True
+            # Stable centroids: stop K-means and begin GA.
+            if new_centroids == centroids:
+                break
 
-    def _fitness(self, candidate: List[List[Waypoint]]) -> float:
-        if not self._is_feasible(candidate):
+            centroids = new_centroids
+
+        clusters[:active_k] = active_clusters
+
+        return clusters
+
+    # ============================================================
+    # GA: optimize waypoint order in ONE fixed cluster
+    # ============================================================
+
+    def _route_fitness(
+        self,
+        sequence: List[Waypoint],
+    ) -> float:
+        """
+        Fitness = total revenue rate.
+
+        Higher is better.
+        A route with m_j < 1 is infeasible.
+        """
+        m_j = self._compute_m_j(sequence)
+
+        if m_j < 1:
             return float("-inf")
 
-        total_rate = 0.0
-        for route in candidate:
-            if not route:
-                continue
+        tour_time = self._compute_tour_flight_time(
+            sequence,
+            m_j,
+        )
 
-            m_j = self._compute_m_j(route)
-            tour_time = self._compute_tour_flight_time(route, m_j)
-            total_revenue = m_j * self.compute_sequence_revenue(route)
-            total_rate += total_revenue / tour_time
+        if tour_time <= 0.0:
+            return float("-inf")
 
-        return total_rate
+        total_revenue = (
+            m_j
+            * self.compute_sequence_revenue(sequence)
+        )
+
+        return total_revenue / tour_time
 
     def _tournament_select(
         self,
-        scored_population: List[Tuple[float, List[List[Waypoint]]]],
+        population: List[List[Waypoint]],
         tournament_size: int = 3,
-    ) -> List[List[Waypoint]]:
+    ) -> List[Waypoint]:
         contenders = self.rng.sample(
-            scored_population,
-            k=min(tournament_size, len(scored_population)),
+            population,
+            k=min(tournament_size, len(population)),
         )
-        _, winner = max(contenders, key=lambda item: item[0])
-        return self._copy_candidate(winner)
 
-    @staticmethod
-    def _copy_candidate(
-        candidate: List[List[Waypoint]],
-    ) -> List[List[Waypoint]]:
-        return [route.copy() for route in candidate]
+        winner = max(
+            contenders,
+            key=self._route_fitness,
+        )
 
-    def _apply_candidate(self, candidate: List[List[Waypoint]]) -> None:
-        self.reset()
-        for uav, route in zip(self.uavs, candidate):
-            uav.sequence = route.copy()
-            uav.m_j = self._compute_m_j(uav.sequence)
+        return winner.copy()
+
+    def _order_crossover(
+        self,
+        parent_a: List[Waypoint],
+        parent_b: List[Waypoint],
+    ) -> List[Waypoint]:
+        """
+        Order crossover.
+
+        The child contains every waypoint in the fixed cluster exactly once.
+        """
+        size = len(parent_a)
+
+        if size < 2:
+            return parent_a.copy()
+
+        start, end = sorted(
+            self.rng.sample(range(size), 2)
+        )
+
+        child: List[Optional[Waypoint]] = [
+            None
+            for _ in range(size)
+        ]
+
+        child[start:end + 1] = parent_a[start:end + 1]
+
+        selected_ids = {
+            id(wp)
+            for wp in child
+            if wp is not None
+        }
+
+        remaining_waypoints = [
+            wp
+            for wp in parent_b
+            if id(wp) not in selected_ids
+        ]
+
+        empty_positions = [
+            index
+            for index, waypoint in enumerate(child)
+            if waypoint is None
+        ]
+
+        for index, waypoint in zip(
+            empty_positions,
+            remaining_waypoints,
+        ):
+            child[index] = waypoint
+
+        return [
+            waypoint
+            for waypoint in child
+            if waypoint is not None
+        ]
+
+    def _swap_mutation(
+        self,
+        sequence: List[Waypoint],
+    ) -> List[Waypoint]:
+        """Swap two waypoint positions in the same UAV route."""
+        child = sequence.copy()
+
+        if len(child) < 2:
+            return child
+
+        first_index, second_index = self.rng.sample(
+            range(len(child)),
+            2,
+        )
+
+        child[first_index], child[second_index] = (
+            child[second_index],
+            child[first_index],
+        )
+
+        return child
+
+    def _ga_optimize_cluster(
+        self,
+        cluster: List[Waypoint],
+    ) -> List[Waypoint]:
+        """
+        Run an independent GA for one fixed K-means cluster.
+
+        Chromosome:
+            A permutation of the cluster's waypoints.
+
+        Operators:
+            Tournament selection
+            Order crossover with probability 0.60
+            Swap mutation with probability 0.05
+            Elitism: retain best route each generation
+        """
+        if len(cluster) <= 1:
+            return cluster.copy()
+
+        population: List[List[Waypoint]] = [
+            self.rng.sample(cluster, len(cluster))
+            for _ in range(self.population_size)
+        ]
+
+        best_route = max(
+            population,
+            key=self._route_fitness,
+        ).copy()
+
+        best_fitness = self._route_fitness(best_route)
+
+        for _ in range(self.generations):
+            population.sort(
+                key=self._route_fitness,
+                reverse=True,
+            )
+
+            next_population: List[List[Waypoint]] = [
+                population[0].copy()
+            ]
+
+            while len(next_population) < self.population_size:
+                parent_a = self._tournament_select(population)
+                parent_b = self._tournament_select(population)
+
+                if self.rng.random() < self.crossover_probability:
+                    child = self._order_crossover(
+                        parent_a,
+                        parent_b,
+                    )
+                else:
+                    child = parent_a.copy()
+
+                if self.rng.random() < self.mutation_probability:
+                    child = self._swap_mutation(child)
+
+                next_population.append(child)
+
+            population = next_population
+
+            generation_best = max(
+                population,
+                key=self._route_fitness,
+            )
+
+            generation_best_fitness = self._route_fitness(
+                generation_best
+            )
+
+            if generation_best_fitness > best_fitness:
+                best_route = generation_best.copy()
+                best_fitness = generation_best_fitness
+
+        return best_route
