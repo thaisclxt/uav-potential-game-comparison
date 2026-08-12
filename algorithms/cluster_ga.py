@@ -361,7 +361,7 @@ class ClusterGAAllocator:
             for _ in range(active_k)
         ]
 
-        for _ in range(100):
+        for iteration in range(100):
             new_clusters: List[List[Waypoint]] = [
                 []
                 for _ in range(active_k)
@@ -398,6 +398,10 @@ class ClusterGAAllocator:
 
             # Stable centroids: stop K-means and begin GA.
             if new_centroids == centroids:
+                print(
+                    f"[ClusterGA][KMeans] Converged after "
+                    f"{iteration} iteration(s)."
+                )
                 break
 
             centroids = new_centroids

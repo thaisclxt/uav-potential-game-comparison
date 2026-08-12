@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import List, Type
 import random
+import time
 
 import pandas as pd
 
@@ -33,9 +34,17 @@ ALLOCATORS = {
 def _build_run_dataframes(
     uavs: List[UAV],
     allocator,
+    elapsed_seconds: float,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    rev_row = {"negotiation_round": 0}
-    seq_row = {"negotiation_round": 0}
+    rev_row = {
+        "negotiation_round": 0,
+        "runtime_seconds": elapsed_seconds,
+    }
+
+    seq_row = {
+        "negotiation_round": 0,
+        "runtime_seconds": elapsed_seconds,
+    }
 
     for uav in uavs:
         z_j = allocator.compute_revenue_rate(uav)
@@ -52,10 +61,10 @@ def _build_run_dataframes(
         )
         seq_row[f"m_{uav.uid}"] = uav.m_j
 
-    return (
-        pd.DataFrame([rev_row]),
-        pd.DataFrame([seq_row]),
-    )
+    revenue_df = pd.DataFrame([rev_row])
+    tour_df = pd.DataFrame([seq_row])
+
+    return revenue_df, tour_df
 
 
 def _run_one_environment(
@@ -78,20 +87,24 @@ def _run_one_environment(
         "max_flight_time": uav_cfg.max_flight_time,
     }
 
-    # ClusterGA uses a random generator internally.
-    # Supplying a run-specific seed makes it reproducible.
     if algorithm_name == "cluster_ga":
         allocator_kwargs["random_state"] = random_state
 
     allocator = allocator_class(**allocator_kwargs)
 
-    uavs, unassigned, total_revenue, total_revenue_rate = (
+    # Start timing only after allocator construction.
+    start_time = time.perf_counter()
+
+    uavs, _, total_revenue, total_revenue_rate = (
         allocator.solve()
     )
+
+    elapsed_seconds = time.perf_counter() - start_time
 
     revenue_df, tour_df = _build_run_dataframes(
         uavs=uavs,
         allocator=allocator,
+        elapsed_seconds=elapsed_seconds,
     )
 
     revenue_sheets.append(revenue_df)
@@ -102,7 +115,7 @@ def _run_one_environment(
         f"{source_label} | {run_label} | "
         f"total revenue = {total_revenue:.2f}, "
         f"total revenue rate = {total_revenue_rate:.2f}, "
-        f"unassigned = {len(unassigned)}"
+        f"runtime = {elapsed_seconds:.4f} "
     )
 
 
@@ -115,6 +128,8 @@ def run_simulation(
     waypoint_files: List[Path],
     algorithm_name: str,
 ) -> None:
+    full_simulation_start = time.perf_counter()
+
     if algorithm_name not in ALLOCATORS:
         raise ValueError(
             f"Unknown algorithm: {algorithm_name}. "
@@ -137,7 +152,7 @@ def run_simulation(
                 print(f"[RUNNER] Skipping {wp_file.name}: {exc}")
                 continue
 
-            _, revenue_dir, tour_dir, _ = prepare_scenario_outputs_dirs(
+            _, revenue_dir, tour_dir = prepare_scenario_outputs_dirs(
                 outputs_dir=algorithm_outputs_dir,
                 m=n_uavs,
                 grid_size=grid_size,
@@ -152,8 +167,14 @@ def run_simulation(
             )
 
             xls = pd.ExcelFile(wp_file)
-            for sheet_idx, sheet_name in enumerate(xls.sheet_names, start=1):
-                target_waypoints = load_waypoints_sheet(str(wp_file), sheet_name)
+            for sheet_idx, sheet_name in enumerate(
+                xls.sheet_names[:100],
+                start=1,
+            ):
+                target_waypoints = load_waypoints_sheet(
+                    str(wp_file),
+                    sheet_name,
+                )
 
                 environment = GridEnvironment(
                     project_configuration=project_cfg,
@@ -183,6 +204,7 @@ def run_simulation(
                 )
 
             export_runs_to_excel(
+                algorithm_name=algorithm_name,
                 m=n_uavs,
                 uav_speed=uav_cfg.speed,
                 max_flight_time=uav_cfg.max_flight_time,
@@ -197,7 +219,7 @@ def run_simulation(
         n_uavs = uav_cfg.num_uavs
         grid_size = len(wp_cfg.revenue_matrix) if sim_cfg.scenario == "fixed" else grid_cfg.width
 
-        _, revenue_dir, tour_dir, _ = prepare_scenario_outputs_dirs(
+        _, revenue_dir, tour_dir = prepare_scenario_outputs_dirs(
             outputs_dir=algorithm_outputs_dir,
             m=n_uavs,
             grid_size=grid_size,
@@ -258,6 +280,7 @@ def run_simulation(
             )
 
         export_runs_to_excel(
+            algorithm_name=algorithm_name,
             m=n_uavs,
             uav_speed=uav_cfg.speed,
             max_flight_time=uav_cfg.max_flight_time,
@@ -272,3 +295,13 @@ def run_simulation(
             f"[RUNNER] Saved {algorithm_name} outputs to: "
             f"{algorithm_outputs_dir / f'UAVs{n_uavs}_GRID{grid_size}'}"
         )
+
+    full_simulation_elapsed = (
+        time.perf_counter() - full_simulation_start
+    )
+
+    print(
+        f"\n[RUNNER] Full {algorithm_name} simulation completed in "
+        f"{full_simulation_elapsed:.2f} seconds "
+        f"({full_simulation_elapsed / 60:.2f} minutes)."
+    )

@@ -1,4 +1,5 @@
 import argparse
+import time
 from pathlib import Path
 
 from src.config import load_configuration
@@ -14,20 +15,20 @@ def parse_arguments() -> argparse.Namespace:
         "--algorithm",
         choices=["greedy", "cluster_ga"],
         required=True,
-        help="Waypoint-allocation algorithm to run.",
     )
 
     parser.add_argument(
         "--settings",
         type=Path,
         default=Path("settings.yaml"),
-        help="Path to the simulation settings YAML file.",
     )
 
     return parser.parse_args()
 
 
 def main() -> None:
+    full_program_start = time.perf_counter()
+
     args = parse_arguments()
 
     (
@@ -55,6 +56,14 @@ def main() -> None:
         wp_cfg=wp_cfg,
         waypoint_files=waypoint_files,
         algorithm_name=args.algorithm,
+    )
+
+    full_program_elapsed = time.perf_counter() - full_program_start
+
+    print(
+        f"\n[MAIN] Full program runtime for {args.algorithm}: "
+        f"{full_program_elapsed:.2f} seconds "
+        f"({full_program_elapsed / 60:.2f} minutes)."
     )
 
 
