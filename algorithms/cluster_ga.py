@@ -29,8 +29,8 @@ class ClusterGAAllocator:
         num_uavs: int,
         uav_speed: float,
         max_flight_time: float,
-        population_size: int = 20, #80
-        generations: int = 100, #5000
+        population_size: int = 80,
+        generations: int = 5000,
         crossover_probability: float = 0.60,
         mutation_probability: float = 0.05,
         random_state: Optional[int] = 42,
