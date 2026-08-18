@@ -155,9 +155,9 @@ def _series_for_uav_count(
         {
             "NRGG": [...],
             "NSGG": [...],
+            "IRADA": [...],
             "Greedy": [...],
             "Cluster+GA": [...],
-            "IRADA": [...],
         }
 
     for one UAV count.
@@ -200,7 +200,7 @@ def _series_for_uav_count(
             series[label].extend(rates)
 
     # Same logic as Analysis.py:
-    # NonOverlap labels first, then other algorithms, IRADA last.
+    # NonOverlap labels first, then other algorithms
     nonoverlap_labels = sorted(nonoverlap_labels)
 
     ordered_labels = nonoverlap_labels.copy()
@@ -257,7 +257,6 @@ def plot_final_revenue_rate_comparison(
         / f"UAVs{uav_count}_final_total_revenue_rate.png"
     )
 
-    # Same format as Analysis.py::boxplot_final_totals_with_irada()
     fig, axis = plt.subplots(
         figsize=(1.2 * len(labels) + 4, 6)
     )
@@ -268,12 +267,10 @@ def plot_final_revenue_rate_comparison(
         patch_artist=True,
     )
 
-    # Same blue boxes and black edges as Analysis.py.
     for box in boxplot["boxes"]:
         box.set_facecolor("C0")
         box.set_edgecolor("black")
 
-    # Same orange median line as Analysis.py.
     for median in boxplot["medians"]:
         median.set(color="orange", linewidth=2)
 
@@ -348,7 +345,7 @@ if __name__ == "__main__":
 
         "Greedy": {
             "root": Path("results/greedy"),
-            "workbook_pattern": "*Greedy*.xlsx",
+            "workbook_pattern": "*.xlsx",
             "kind": "single",
         },
 
