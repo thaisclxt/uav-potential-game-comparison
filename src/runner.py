@@ -1,9 +1,9 @@
-from pathlib import Path
-from typing import List, Type
 import random
 import time
-
 import pandas as pd
+
+from pathlib import Path
+from typing import List, Type
 
 from .config import (
     ProjectConfig,
@@ -23,6 +23,7 @@ from .utils import extract_grid_size, extract_num_uavs
 
 from algorithms.greedy import GreedyAllocator
 from algorithms.cluster_ga import ClusterGAAllocator
+from algorithms.base_allocator import BaseAllocator
 
 
 ALLOCATORS = {
@@ -78,7 +79,7 @@ def _run_one_environment(
     uav_cfg: UAVConfig,
     random_state: int,
 ) -> None:
-    allocator_class: Type = ALLOCATORS[algorithm_name]
+    allocator_class: Type[BaseAllocator] = ALLOCATORS[algorithm_name]
 
     allocator_kwargs = {
         "environment": environment,
@@ -140,8 +141,6 @@ def run_simulation(
     algorithm_outputs_dir = base_outputs_dir / algorithm_name
 
     base_outputs_dir = Path(project_cfg.outputs_dir)
-    greedy_outputs_dir = base_outputs_dir / "greedy"
-    cluster_ga_outputs_dir = base_outputs_dir / "cluster_ga"
 
     if sim_cfg.scenario == "excel":
         for wp_file in waypoint_files:
