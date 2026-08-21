@@ -13,8 +13,8 @@ from src.models import Waypoint
 # Paths
 # ============================================================
 
-RESULTS_DIR = Path("results/non_overlap")
-WAYPOINTS_DIR = Path("waypoints")
+RESULTS_DIR = Path("results/overlap")
+WAYPOINTS_DIR = Path("overlap_waypoints")
 
 GRID_SIZE = 13
 MIN_UAVS = 3
