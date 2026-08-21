@@ -13,165 +13,218 @@ from src.models import Waypoint
 # Paths
 # ============================================================
 
-TOUR_DIR = Path(
-    "results/non_overlap/UAVs3_GRID13/tour"
-)
+RESULTS_DIR = Path("results/non_overlap")
+WAYPOINTS_DIR = Path("waypoints")
 
-WAYPOINT_FILE = Path(
-    "waypoints/UAVs3_GRID13_waypoints.xlsx"
-)
+GRID_SIZE = 13
+MIN_UAVS = 3
+MAX_UAVS = 10
 
-OUTPUT_DIR = Path(
-    "results/non_overlap/UAVs3_GRID13/new_revenue"
-)
+
+# ============================================================
+# Helpers
+# ============================================================
+
+def extract_num_uavs(excel_file: Path) -> int:
+    """Extract UAV count from a filename such as UAVs3_GRID13_...xlsx."""
+    try:
+        return int(
+            excel_file.stem.split("_")[0].replace("UAVs", "")
+        )
+    except (IndexError, ValueError) as exc:
+        raise ValueError(
+            f"Cannot determine UAV count from {excel_file.name}."
+        ) from exc
+
 
 def load_waypoints(
     waypoint_file: Path,
     sheet_name: str,
 ) -> Dict[int, Waypoint]:
-    """
-    Load waypoints from one worksheet.
-
-    Expected waypoint columns:
-        Waypoint, Revenue, X, Y
-    """
+    """Load one waypoint worksheet as {waypoint_id: Waypoint}."""
     dataframe = pd.read_excel(
         waypoint_file,
         sheet_name=sheet_name,
     )
 
-    dataframe.columns = dataframe.columns.str.strip()
+    dataframe.columns = dataframe.columns.astype(str).str.strip()
 
-    required_columns = {
-        "Waypoint",
-        "Revenue",
-        "X",
-        "Y",
-    }
-
-    missing_columns = (
-        required_columns
-        - set(dataframe.columns)
-    )
+    required_columns = {"Waypoint", "Revenue", "X", "Y"}
+    missing_columns = required_columns - set(dataframe.columns)
 
     if missing_columns:
         raise ValueError(
-            f"Missing columns in {waypoint_file.name}, "
-            f"sheet '{sheet_name}': {missing_columns}"
+            f"{waypoint_file.name} / {sheet_name} is missing "
+            f"columns: {sorted(missing_columns)}"
         )
 
-    waypoints: Dict[int, Waypoint] = {}
-
-    for _, row in dataframe.iterrows():
-        waypoint = Waypoint(
-            wid=int(row["Waypoint"]),
-            x=float(row["X"]),
-            y=float(row["Y"]),
-            revenue=float(row["Revenue"]),
+    return {
+        int(row.Waypoint): Waypoint(
+            wid=int(row.Waypoint),
+            x=float(row.X),
+            y=float(row.Y),
+            revenue=float(row.Revenue),
         )
-
-        waypoints[waypoint.wid] = waypoint
-
-    return waypoints
+        for row in dataframe.itertuples(index=False)
+    }
 
 
 def parse_sequence(
-    sequence_value: object,
-    waypoints: Dict[int, Waypoint],
+    value: object,
+    waypoint_by_id: Dict[int, Waypoint],
 ) -> List[Waypoint]:
-    """
-    Convert a stored tour sequence such as:
-
-        "1-5-9-12"
-
-    into a list of matching Waypoint objects.
-    """
-    if pd.isna(sequence_value):
+    """Convert '1-4-8' into a list of Waypoint objects."""
+    if pd.isna(value):
         return []
 
-    sequence_text = str(sequence_value).strip()
+    text = str(value).strip()
 
-    if not sequence_text:
+    if not text:
         return []
 
-    waypoint_ids = [
-        int(value.strip())
-        for value in sequence_text.split("-")
-        if value.strip()
-    ]
+    waypoint_ids = (
+        int(item.strip())
+        for item in text.split("-")
+        if item.strip()
+    )
 
-    sequence: List[Waypoint] = []
-
-    for waypoint_id in waypoint_ids:
-        if waypoint_id not in waypoints:
-            raise ValueError(
-                f"Waypoint ID {waypoint_id} was not found "
-                "in the corresponding waypoint worksheet."
-            )
-
-        sequence.append(
-            waypoints[waypoint_id]
-        )
-
-    return sequence
-
-
-def extract_num_uavs(
-    excel_file: Path,
-) -> int:
-    """
-    Example filename:
-
-        UAVs3_GRID13_600_10_cluster_ga_sequences.xlsx
-
-    Returns:
-        3
-    """
     try:
-        uav_part = excel_file.stem.split("_")[0]
-
-        return int(
-            uav_part.replace("UAVs", "")
-        )
-
-    except (ValueError, IndexError) as exc:
+        return [
+            waypoint_by_id[waypoint_id]
+            for waypoint_id in waypoint_ids
+        ]
+    except KeyError as exc:
         raise ValueError(
-            f"Could not determine the number of UAVs "
-            f"from filename: {excel_file.name}"
+            f"Waypoint ID {exc.args[0]} is not present "
+            "in the corresponding waypoint sheet."
         ) from exc
 
 
-def validate_tour_columns(
-    dataframe: pd.DataFrame,
-    num_uavs: int,
-    sheet_name: str,
-) -> None:
-    """
-    Require negotiation_round and a sequence/m_j pair for
-    every configured UAV.
-    """
-    required_columns = {
-        "negotiation_round",
-    }
-
-    for uav_id in range(num_uavs):
-        required_columns.add(f"UAV{uav_id}")
-        required_columns.add(f"m_{uav_id}")
-
-    missing_columns = (
-        required_columns
-        - set(dataframe.columns)
+def create_environment(
+    waypoint_by_id: Dict[int, Waypoint],
+    project_cfg,
+    sim_cfg,
+    grid_cfg,
+    wp_cfg,
+) -> GridEnvironment:
+    """Create one environment for one simulation worksheet."""
+    return GridEnvironment(
+        project_configuration=project_cfg,
+        simulation=sim_cfg,
+        target_waypoints=list(waypoint_by_id.values()),
+        width=grid_cfg.width,
+        height=grid_cfg.height,
+        spacing=grid_cfg.spacing,
+        depot_location=grid_cfg.depot_location,
+        wp_base_revenue=wp_cfg.base_revenue,
+        wp_min_revenue=wp_cfg.min_revenue,
+        wp_max_revenue=wp_cfg.max_revenue,
+        number_targets=wp_cfg.number_targets,
+        revenue_matrix=wp_cfg.revenue_matrix,
     )
 
-    if missing_columns:
-        raise ValueError(
-            f"Missing required columns in sheet "
-            f"'{sheet_name}': {sorted(missing_columns)}"
+
+# ============================================================
+# Revenue-rate calculation
+# ============================================================
+
+def calculate_sheet_revenue_rates(
+    tour_dataframe: pd.DataFrame,
+    waypoint_file: Path,
+    sheet_name: str,
+    num_uavs: int,
+    project_cfg,
+    sim_cfg,
+    grid_cfg,
+    uav_cfg,
+    wp_cfg,
+) -> pd.DataFrame:
+    """
+    Calculate all UAV revenue rates for every negotiation round
+    in one tour worksheet.
+    """
+    if tour_dataframe.empty:
+        return pd.DataFrame(
+            columns=[
+                "negotiation_round",
+                *[
+                    f"UAV{uav_id}"
+                    for uav_id in range(num_uavs)
+                ],
+            ]
         )
-    
+
+    if "negotiation_round" not in tour_dataframe.columns:
+        raise ValueError(
+            f"Sheet '{sheet_name}' has no negotiation_round column."
+        )
+
+    waypoint_by_id = load_waypoints(
+        waypoint_file=waypoint_file,
+        sheet_name=sheet_name,
+    )
+
+    environment = create_environment(
+        waypoint_by_id=waypoint_by_id,
+        project_cfg=project_cfg,
+        sim_cfg=sim_cfg,
+        grid_cfg=grid_cfg,
+        wp_cfg=wp_cfg,
+    )
+
+    allocator = BaseAllocator(
+        environment=environment,
+        num_uavs=num_uavs,
+        uav_speed=uav_cfg.speed,
+        max_flight_time=uav_cfg.max_flight_time,
+    )
+
+    output_rows: List[Dict[str, float | int]] = []
+
+    for row in tour_dataframe.itertuples(index=False):
+        row_data = row._asdict()
+
+        revenue_row: Dict[str, float | int] = {
+            "negotiation_round": row_data["negotiation_round"],
+        }
+
+        for uav_id in range(num_uavs):
+            sequence_column = f"UAV{uav_id}"
+            m_column = f"m_{uav_id}"
+
+            sequence_value = row_data.get(sequence_column)
+            m_j_value = row_data.get(m_column)
+
+            if sequence_value is None or m_j_value is None:
+                revenue_row[f"UAV{uav_id}"] = 0.0
+                continue
+
+            sequence = parse_sequence(
+                value=sequence_value,
+                waypoint_by_id=waypoint_by_id,
+            )
+
+            m_j = 0 if pd.isna(m_j_value) else int(m_j_value)
+
+            uav = allocator.uavs[uav_id]
+            uav.sequence = sequence
+            uav.m_j = m_j
+
+            revenue_row[f"UAV{uav_id}"] = (
+                allocator.compute_revenue_rate(uav)
+            )
+
+        output_rows.append(revenue_row)
+
+    return pd.DataFrame(output_rows)
+
+
+# ============================================================
+# Process one Excel workbook
+# ============================================================
 
 def calculate_excel_file(
-    excel_file: Path,
+    tour_file: Path,
     waypoint_file: Path,
     project_cfg,
     sim_cfg,
@@ -180,168 +233,65 @@ def calculate_excel_file(
     wp_cfg,
 ) -> Dict[str, pd.DataFrame]:
     """
-    Read every worksheet and every negotiation-round row from
-    an input tour workbook.
-
-    Returns:
-        {
-            "SimRun1": dataframe_of_revenue_rates,
-            "SimRun2": dataframe_of_revenue_rates,
-            ...
-        }
-
-    Output DataFrame columns:
-        negotiation_round, UAV0, UAV1, ..., UAV(n-1)
+    Create a revenue-rate DataFrame for every sheet
+    in a tour workbook.
     """
-    print(f"\n[REVENUE] Processing: {excel_file.name}")
+    num_uavs = extract_num_uavs(tour_file)
 
-    num_uavs = extract_num_uavs(excel_file)
+    print(
+        f"\n[REVENUE] Processing {tour_file.name} "
+        f"({num_uavs} UAVs)"
+    )
 
-    print(f"[REVENUE] Number of UAVs: {num_uavs}")
-
-    tour_xls = pd.ExcelFile(excel_file)
-
+    tour_xls = pd.ExcelFile(tour_file)
     revenue_sheets: Dict[str, pd.DataFrame] = {}
 
     for sheet_name in tour_xls.sheet_names:
-        print(f"\n[REVENUE] Processing sheet: {sheet_name}")
-
         tour_dataframe = pd.read_excel(
-            excel_file,
+            tour_file,
             sheet_name=sheet_name,
         )
-
-        output_rows: List[Dict[str, float | int]] = []
-
-        # Create one zero-rate output row for empty worksheets.
-        if tour_dataframe.empty:
-            print(
-                "[REVENUE] Sheet is empty. "
-                "Writing one row with zero revenue rates."
-            )
-
-            empty_row: Dict[str, float | int] = {
-                "negotiation_round": 0,
-            }
-
-            for uav_id in range(num_uavs):
-                empty_row[f"UAV{uav_id}"] = 0.0
-
-            revenue_sheets[sheet_name] = pd.DataFrame(
-                [empty_row]
-            )
-
-            continue
 
         tour_dataframe.columns = (
-            tour_dataframe.columns
-            .astype(str)
-            .str.strip()
+            tour_dataframe.columns.astype(str).str.strip()
         )
 
-        validate_tour_columns(
-            dataframe=tour_dataframe,
-            num_uavs=num_uavs,
-            sheet_name=sheet_name,
-        )
-
-        # Load waypoint positions/revenues once for this SimRun sheet.
-        waypoints = load_waypoints(
-            waypoint_file=waypoint_file,
-            sheet_name=sheet_name,
-        )
-
-        environment = GridEnvironment(
-            project_configuration=project_cfg,
-            simulation=sim_cfg,
-            target_waypoints=list(waypoints.values()),
-            width=grid_cfg.width,
-            height=grid_cfg.height,
-            spacing=grid_cfg.spacing,
-            depot_location=grid_cfg.depot_location,
-            wp_base_revenue=wp_cfg.base_revenue,
-            wp_min_revenue=wp_cfg.min_revenue,
-            wp_max_revenue=wp_cfg.max_revenue,
-            number_targets=wp_cfg.number_targets,
-            revenue_matrix=wp_cfg.revenue_matrix,
-        )
-
-        # BaseAllocator provides shared repeated-tour and
-        # revenue-rate calculations. It does not solve/optimize.
-        allocator = BaseAllocator(
-            environment=environment,
-            num_uavs=num_uavs,
-            uav_speed=uav_cfg.speed,
-            max_flight_time=uav_cfg.max_flight_time,
-        )
-
-        for _, row in tour_dataframe.iterrows():
-            negotiation_round = row["negotiation_round"]
-
-            revenue_row: Dict[str, float | int] = {
-                "negotiation_round": negotiation_round,
-            }
-
-            allocator.reset()
-
-            for uav_id in range(num_uavs):
-                sequence_column = f"UAV{uav_id}"
-                m_column = f"m_{uav_id}"
-
-                sequence = parse_sequence(
-                    sequence_value=row[sequence_column],
-                    waypoints=waypoints,
-                )
-
-                stored_m_j = row[m_column]
-
-                m_j = (
-                    0
-                    if pd.isna(stored_m_j)
-                    else int(stored_m_j)
-                )
-
-                uav = allocator.uavs[uav_id]
-                uav.sequence = sequence
-                uav.m_j = m_j
-
-                revenue_rate = allocator.compute_revenue_rate(
-                    uav
-                )
-
-                revenue_row[f"UAV{uav_id}"] = revenue_rate
-
-            output_rows.append(revenue_row)
-
-        revenue_sheets[sheet_name] = pd.DataFrame(
-            output_rows
+        revenue_sheets[sheet_name] = (
+            calculate_sheet_revenue_rates(
+                tour_dataframe=tour_dataframe,
+                waypoint_file=waypoint_file,
+                sheet_name=sheet_name,
+                num_uavs=num_uavs,
+                project_cfg=project_cfg,
+                sim_cfg=sim_cfg,
+                grid_cfg=grid_cfg,
+                uav_cfg=uav_cfg,
+                wp_cfg=wp_cfg,
+            )
         )
 
         print(
-            f"[REVENUE] Completed {len(output_rows)} "
-            "negotiation round(s)."
+            f"[REVENUE] {sheet_name}: "
+            f"{len(tour_dataframe)} negotiation rounds processed."
         )
 
     return revenue_sheets
 
 
+# ============================================================
+# Save result workbook
+# ============================================================
+
 def save_revenue_file(
-    input_file: Path,
+    tour_file: Path,
     revenue_sheets: Dict[str, pd.DataFrame],
     output_dir: Path,
 ) -> Path:
-    """
-    Save calculated revenue rates into a new workbook.
-
-    The output workbook preserves the source worksheet names.
-    """
-    output_dir.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    """Write all revenue-rate sheets to one Excel workbook."""
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     output_file = output_dir / (
-        f"{input_file.stem}_revenue_rates.xlsx"
+        f"{tour_file.stem}_revenue_rates.xlsx"
     )
 
     with pd.ExcelWriter(
@@ -358,62 +308,108 @@ def save_revenue_file(
     return output_file
 
 
-def main() -> None:
-    settings_path = Path("settings.yaml")
+# ============================================================
+# Main
+# ============================================================
 
+def main() -> None:
     (
         project_cfg,
         sim_cfg,
         grid_cfg,
         uav_cfg,
         wp_cfg,
-    ) = load_configuration(settings_path)
-
-    tour_files = sorted(
-        TOUR_DIR.glob("*.xlsx")
+    ) = load_configuration(
+        Path("settings.yaml")
     )
 
-    if not tour_files:
-        print(
-            f"[REVENUE] No .xlsx files found in:\n"
-            f"  {TOUR_DIR.resolve()}"
+    for num_uavs in range(
+        MIN_UAVS,
+        MAX_UAVS + 1,
+    ):
+        scenario_name = (
+            f"UAVs{num_uavs}_GRID{GRID_SIZE}"
         )
-        return
 
-    print(
-        f"[REVENUE] Found {len(tour_files)} "
-        "tour workbook(s)."
-    )
+        tour_dir = (
+            RESULTS_DIR
+            / scenario_name
+            / "tour"
+        )
 
-    for tour_file in tour_files:
-        try:
-            revenue_sheets = calculate_excel_file(
-                excel_file=tour_file,
-                waypoint_file=WAYPOINT_FILE,
-                project_cfg=project_cfg,
-                sim_cfg=sim_cfg,
-                grid_cfg=grid_cfg,
-                uav_cfg=uav_cfg,
-                wp_cfg=wp_cfg,
-            )
+        waypoint_file = (
+            WAYPOINTS_DIR
+            / f"{scenario_name}_waypoints.xlsx"
+        )
 
-            output_file = save_revenue_file(
-                input_file=tour_file,
-                revenue_sheets=revenue_sheets,
-                output_dir=OUTPUT_DIR,
-            )
+        output_dir = (
+            RESULTS_DIR
+            / scenario_name
+            / "new_revenue"
+        )
 
+        if not tour_dir.exists():
             print(
-                f"\n[REVENUE] Saved output workbook:\n"
-                f"  {output_file.resolve()}"
+                f"\n[REVENUE] Skipping {scenario_name}: "
+                f"tour directory not found:\n"
+                f"  {tour_dir.resolve()}"
             )
+            continue
 
-        except Exception as exc:
+        if not waypoint_file.exists():
             print(
-                f"\n[REVENUE] Failed to process "
-                f"{tour_file.name}:\n"
-                f"  {exc}"
+                f"\n[REVENUE] Skipping {scenario_name}: "
+                f"waypoint file not found:\n"
+                f"  {waypoint_file.resolve()}"
             )
+            continue
+
+        tour_files = sorted(
+            tour_dir.glob("*.xlsx")
+        )
+
+        if not tour_files:
+            print(
+                f"\n[REVENUE] Skipping {scenario_name}: "
+                "no Excel tour files found."
+            )
+            continue
+
+        print(
+            f"\n{'=' * 60}\n"
+            f"[REVENUE] Scenario: {scenario_name}\n"
+            f"[REVENUE] Tour files: {len(tour_files)}\n"
+            f"{'=' * 60}"
+        )
+
+        for tour_file in tour_files:
+            try:
+                revenue_sheets = calculate_excel_file(
+                    tour_file=tour_file,
+                    waypoint_file=waypoint_file,
+                    project_cfg=project_cfg,
+                    sim_cfg=sim_cfg,
+                    grid_cfg=grid_cfg,
+                    uav_cfg=uav_cfg,
+                    wp_cfg=wp_cfg,
+                )
+
+                output_file = save_revenue_file(
+                    tour_file=tour_file,
+                    revenue_sheets=revenue_sheets,
+                    output_dir=output_dir,
+                )
+
+                print(
+                    f"[REVENUE] Saved: "
+                    f"{output_file.resolve()}"
+                )
+
+            except Exception as exc:
+                print(
+                    f"[REVENUE] Failed: {tour_file.name}\n"
+                    f"Reason: {exc}"
+                )
 
 
 if __name__ == "__main__":
