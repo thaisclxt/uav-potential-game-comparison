@@ -13,8 +13,8 @@ from src.models import Waypoint
 # Paths
 # ============================================================
 
-RESULTS_DIR = Path("results/overlap")
-WAYPOINTS_DIR = Path("overlap_waypoints")
+RESULTS_DIR = Path("results/IRADA")
+WAYPOINTS_DIR = Path("waypoints")
 
 GRID_SIZE = 13
 MIN_UAVS = 3
@@ -146,7 +146,7 @@ def calculate_sheet_revenue_rates(
     if tour_dataframe.empty:
         return pd.DataFrame(
             columns=[
-                "negotiation_round",
+                "Round",
                 *[
                     f"UAV{uav_id}"
                     for uav_id in range(num_uavs)
@@ -154,7 +154,7 @@ def calculate_sheet_revenue_rates(
             ]
         )
 
-    if "negotiation_round" not in tour_dataframe.columns:
+    if "Round" not in tour_dataframe.columns:
         raise ValueError(
             f"Sheet '{sheet_name}' has no negotiation_round column."
         )
@@ -185,7 +185,7 @@ def calculate_sheet_revenue_rates(
         row_data = row._asdict()
 
         revenue_row: Dict[str, float | int] = {
-            "negotiation_round": row_data["negotiation_round"],
+            "Round": row_data["Round"],
         }
 
         for uav_id in range(num_uavs):
@@ -272,7 +272,7 @@ def calculate_excel_file(
 
         print(
             f"[REVENUE] {sheet_name}: "
-            f"{len(tour_dataframe)} negotiation rounds processed."
+            f"{len(tour_dataframe)} rounds processed."
         )
 
     return revenue_sheets
