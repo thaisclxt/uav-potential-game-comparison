@@ -13,11 +13,11 @@ class ClusterGAAllocator(BaseAllocator):
         num_uavs: int,
         uav_speed: float,
         max_flight_time: float,
-        population_size: int = 80,
-        generations: int = 5000,
-        crossover_probability: float = 0.60,
-        mutation_probability: float = 0.05,
-        random_state: Optional[int] = 42,
+        population_size: int,
+        generations: int,
+        crossover_probability: float,
+        mutation_probability: float,
+        random_state: Optional[int],
     ) -> None:
         super().__init__(
             environment=environment,
@@ -84,10 +84,7 @@ class ClusterGAAllocator(BaseAllocator):
             total_revenue_rate,
         )
 
-    # ============================================================
-    # K-means: fixed clusters, k = num_uavs
-    # ============================================================
-
+    
     @staticmethod
     def _squared_distance(
         point_a: Tuple[float, float],

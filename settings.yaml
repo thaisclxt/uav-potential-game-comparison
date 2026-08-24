@@ -42,3 +42,11 @@ waypoints:
     - [0, 1, 0]
     - [6, 0, 10]
     - [2, 11, 6]
+
+algorithms:
+  cluster_ga:
+    population_size: 80
+    generations: 5000
+    crossover_probability: 0.60
+    mutation_probability: 0.05
+    random_state: 42

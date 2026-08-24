@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List, Type
 
 from .config import (
+    ClusterGAConfig,
     ProjectConfig,
     SimulationConfig,
     GridConfig,
@@ -77,6 +78,7 @@ def _run_one_environment(
     revenue_sheets: List[pd.DataFrame],
     tour_sheets: List[pd.DataFrame],
     uav_cfg: UAVConfig,
+    cluster_cfg: ClusterGAConfig,
     random_state: int,
 ) -> None:
     allocator_class: Type[BaseAllocator] = ALLOCATORS[algorithm_name]
@@ -89,6 +91,10 @@ def _run_one_environment(
     }
 
     if algorithm_name == "cluster_ga":
+        allocator_kwargs["population_size"] = cluster_cfg.population_size
+        allocator_kwargs["generations"] = cluster_cfg.generations
+        allocator_kwargs["crossover_probability"] = cluster_cfg.crossover_probability
+        allocator_kwargs["mutation_probability"] = cluster_cfg.mutation_probability
         allocator_kwargs["random_state"] = random_state
 
     allocator = allocator_class(**allocator_kwargs)
@@ -126,6 +132,7 @@ def run_simulation(
     grid_cfg: GridConfig,
     uav_cfg: UAVConfig,
     wp_cfg: WaypointConfig,
+    cluster_cfg: ClusterGAConfig,
     waypoint_files: List[Path],
     algorithm_name: str,
 ) -> None:
@@ -199,6 +206,7 @@ def run_simulation(
                     revenue_sheets=revenue_sheets,
                     tour_sheets=tour_sheets,
                     uav_cfg=uav_cfg,
+                    cluster_cfg=ClusterGAConfig,
                     random_state=sim_cfg.seed + sheet_idx,
                 )
 
@@ -275,6 +283,7 @@ def run_simulation(
                 revenue_sheets=revenue_sheets,
                 tour_sheets=tour_sheets,
                 uav_cfg=uav_cfg,
+                cluster_cfg=ClusterGAConfig,
                 random_state=sim_cfg.seed + run_idx,
             )
 

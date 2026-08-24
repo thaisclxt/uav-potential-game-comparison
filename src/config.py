@@ -43,6 +43,16 @@ class WaypointConfig:
     max_revenue: float
     revenue_matrix: list[list[float]]
 
+
+@dataclass
+class ClusterGAConfig:
+    population_size: int = 80
+    generations: int = 5000
+    crossover_probability: float = 0.60
+    mutation_probability: float = 0.05
+    random_state: int = 42
+
+
 def load_configuration(path: Path):
     with open(path, "r") as f:
         data = yaml.safe_load(f) or {}
@@ -53,6 +63,7 @@ def load_configuration(path: Path):
     depot_d = data.get("depot")
     uav_d = data.get("uav")
     wp_d = data.get("waypoints")
+    cluster_d = data.get("algorithms", {}).get("cluster_ga", {})
 
     project_cfg = ProjectConfig(
         outputs_dir=project_d.get("outputs_dir"),
@@ -86,4 +97,12 @@ def load_configuration(path: Path):
         revenue_matrix=wp_d.get("revenue_matrix"),
     )
 
-    return project_cfg, sim_cfg, grid_cfg, uav_cfg, wp_cfg
+    cluster_cfg = ClusterGAConfig(
+        population_size=cluster_d.get("population_size", 80),
+        generations=cluster_d.get("generations", 5000),
+        crossover_probability=cluster_d.get("crossover_probability", 0.60),
+        mutation_probability=cluster_d.get("mutation_probability", 0.05),
+        random_state=cluster_d.get("random_state", 42),
+    )
+
+    return project_cfg, sim_cfg, grid_cfg, uav_cfg, wp_cfg, cluster_cfg

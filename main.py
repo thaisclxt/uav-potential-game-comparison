@@ -37,6 +37,7 @@ def main() -> None:
         grid_cfg,
         uav_cfg,
         wp_cfg,
+        cluster_cfg,
     ) = load_configuration(args.settings)
 
     waypoint_files = []
@@ -54,6 +55,7 @@ def main() -> None:
         grid_cfg=grid_cfg,
         uav_cfg=uav_cfg,
         wp_cfg=wp_cfg,
+        cluster_cfg=cluster_cfg,
         waypoint_files=waypoint_files,
         algorithm_name=args.algorithm,
     )
