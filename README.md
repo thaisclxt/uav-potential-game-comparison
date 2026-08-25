@@ -39,9 +39,9 @@ The benchmark compares the original game-based methods with two added algorithms
 | `src/runner.py` | Runs a selected algorithm across all requested simulations and exports results. |
 | `src/io_utils.py` | Loads waypoint Excel files and exports simulation outputs to Excel. |
 | `src/utils.py` | Provides utility functions such as travel-time and filename parsing. |
-| `scripts/` | Contains standalone helper programs for processing or validating saved results. |
-| `scripts/calculate_revenue_rate.py` | Recalculates individual UAV revenue rates from stored tour sequences and \(m_j\) values. |
-| `scripts/assign_wp_to_cluster.py` | Produces waypoint-to-UAV cluster assignment files from Cluster+GA tour outputs. |
+| `validation/` | Contains standalone helper programs for processing or validating saved results. |
+| `validation/recalculate_revenue_rate.py` | Recalculates individual UAV revenue rates from stored tour sequences and \(m_j\) values. |
+| `validation/assign_wp_to_cluster.py` | Produces waypoint-to-UAV cluster assignment files from Cluster+GA tour outputs. |
 | `analysis/` | Contains scripts that generate figures, comparisons, and boxplots from stored simulation results. |
 | `data/waypoints/` | Stores input waypoint Excel files. |
 | `results/` | Stores generated Excel results, including revenue rates, tours, and cluster assignments. |
@@ -180,18 +180,18 @@ python -m analysis.per_uav_revenue_share_comparison
 python -m analysis.flight_time_left_comparison
 ```
 
-## Helper Scripts
+## Validation Scripts
 
 Calculate revenue rates from saved tour outputs:
 
 ```bash
-python -m scripts.calculate_revenue_rate
+python -m validation.recalculate_revenue_rate
 ```
 
 Create waypoint-to-UAV cluster-assignment workbooks from saved Cluster+GA sequences:
 
 ```bash
-python -m scripts.assign_wp_to_cluster
+python -m validation.assign_wp_to_cluster
 ```
 
 Each assignment workbook contains one sheet per simulation run and uses the final stored tour. Each sheet has the following format:
