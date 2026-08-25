@@ -2,4 +2,5 @@ pandas
 openpyxl
 PyYAML
 matplotlib
+numpy
 Pillow

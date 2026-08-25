@@ -5,7 +5,7 @@ import pandas as pd
 
 
 RESULTS_DIR = Path("results/cluster_ga")
-WAYPOINTS_DIR = Path("waypoints")
+WAYPOINTS_DIR = Path("data/non_overlap_waypoints")
 
 GRID_SIZE = 13
 MIN_UAVS = 3

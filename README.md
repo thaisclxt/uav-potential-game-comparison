@@ -1,11 +1,11 @@
-# Multi-UAV Task Allocation and Route Planning
+# Multi-UAV Task Allocation and Tour Planning
 
 This project extends a multi-UAV task-allocation and routing simulator developed from Philip's thesis: **"Path Optimization for UAV Waypoint Navigation Using Potential Game Theory"** (Loyola Marymount University, 2025). The project evaluates the original non-overlapping and overlapping game-based approaches against two additional routing baselines:
 
 - **Greedy allocation**
 - **Cluster + Genetic Algorithm (Cluster+GA)**
 
-The goal is to compare how different task-allocation and route-planning strategies affect total revenue rate, per-UAV revenue contribution, and remaining flight time across different fleet sizes.
+The goal is to compare how different task-allocation and tour-planning strategies affect total revenue rate, per-UAV revenue contribution, and remaining flight time across different fleet sizes.
 
 ## Project background
 
@@ -20,8 +20,35 @@ The benchmark compares the original game-based methods with two added algorithms
 1. **Greedy allocator:** assigns feasible targets iteratively according to the revenue-rate objective. 
 - [UAV Path Planning for Target Coverage Task in Dynamic Environment](https://ieeexplore.ieee.org/document/10130088)
 
-2. **Cluster+GA allocator:** uses K-means to form an initial spatial grouping of tasks, then uses a genetic algorithm to improve route order within clusters.
+2. **Cluster+GA allocator:** uses K-means to form an initial spatial grouping of tasks, then uses a genetic algorithm to improve tour order within clusters.
 - [Coordinated Optimization Algorithm Combining GA with Cluster for Multi-UAVs to Multi-tasks Task Assignment and Path Planning](https://ieeexplore.ieee.org/document/8899987)
+
+
+## Folder Description
+
+| Folder or file | Purpose |
+|---|---|
+| `algorithms/` | Contains the waypoint-allocation algorithms and shared allocator logic. |
+| `algorithms/base_allocator.py` | Defines shared functions for repeated tours, flight time, \(m_j\), revenue, and revenue rate. |
+| `algorithms/greedy.py` | Implements the Greedy waypoint-allocation algorithm. |
+| `algorithms/cluster_ga.py` | Implements the Cluster+GA algorithm using K-means and a genetic algorithm. |
+| `src/` | Contains reusable simulation infrastructure. |
+| `src/config.py` | Loads and validates configuration values from `settings.yaml`. |
+| `src/environment.py` | Defines the grid environment, depot, targets, and simulation scenario. |
+| `src/models.py` | Defines data models such as `UAV`, `Waypoint`, and `Depot`. |
+| `src/runner.py` | Runs a selected algorithm across all requested simulations and exports results. |
+| `src/io_utils.py` | Loads waypoint Excel files and exports simulation outputs to Excel. |
+| `src/utils.py` | Provides utility functions such as travel-time and filename parsing. |
+| `scripts/` | Contains standalone helper programs for processing or validating saved results. |
+| `scripts/calculate_revenue_rate.py` | Recalculates individual UAV revenue rates from stored tour sequences and \(m_j\) values. |
+| `scripts/assign_wp_to_cluster.py` | Produces waypoint-to-UAV cluster assignment files from Cluster+GA tour outputs. |
+| `analysis/` | Contains scripts that generate figures, comparisons, and boxplots from stored simulation results. |
+| `data/waypoints/` | Stores input waypoint Excel files. |
+| `results/` | Stores generated Excel results, including revenue rates, tours, and cluster assignments. |
+| `settings.yaml` | Stores simulation, grid, UAV, waypoint, and Cluster+GA settings. |
+| `main.py` | Main entry point for running simulations. |
+| `requirements.txt` | Lists third-party Python dependencies. |
+
 
 ## Experimental setup
 
@@ -33,7 +60,7 @@ Experiments are run for fleet sizes:
 
 For each scenario, the same waypoint instance and UAV configuration should be used across all algorithms to ensure a fair comparison.
 
-Recommended common settings include:
+Example common UAV settings:
 
 ```yaml
 uav:
@@ -42,11 +69,23 @@ uav:
   max_flight_time: 1920
 ```
 
-Use fixed random seeds when reproducibility is required. For Cluster+GA, the seed controls randomized initial centroid selection and GA operations.
+Cluster+GA configuration is stored in `settings.yaml`:
 
-## Output and visualizations
+```yaml
+algorithms:
+  cluster_ga:
+    population_size: 80
+    generations: 5000
+    crossover_probability: 0.60
+    mutation_probability: 0.05
+    random_state: 42
+```
 
-The analysis scripts generate boxplots across simulation runs for each UAV count.
+The Cluster+GA random seed controls K-means initialization and GA random operations, including population initialization, crossover selection, and mutation.
+
+## Output structure
+
+Simulation outputs are grouped by algorithm and UAV/grid scenario.
 
 Output structure:
 
@@ -69,17 +108,19 @@ results/
 │   ├── UAVs3_GRID13/
 │   │   ├── revenue/
 │   │   ├── tour/
+│   │   └── cluster_assignment/
 │   ├── UAVs4_GRID13/
 │   │   ├── revenue/
 │   │   ├── tour/
+│   │   └── cluster_assignment/
 │   └── ...
 ├── greedy
 │   ├── UAVs3_GRID13/
 │   │   ├── revenue/
-│   │   ├── tour/
+│   │   └── tour/
 │   ├── UAVs4_GRID13/
 │   │   ├── revenue/
-│   │   ├── tour/
+│   │   └── tour/
 │   └── ...
 ├── irada
 │   └── ...
@@ -109,17 +150,57 @@ openpyxl
 
 ## Running experiments
 
-1. Configure the desired number of UAVs, speed, maximum flight time, number of runs, and enabled algorithms in `settings.yaml`.
-2. Run the simulation independently.
-3. Run the analysis scripts to create revenue-rate, revenue-share, and flight-time-left plots.
+1. Configure the simulation settings in `settings.yaml`.
+2. Ensure the waypoint Excel files are available in `data/non_overlap_waypoints/` and `data/overlap_waypoints/`.
+3. Run one algorithm at a time.
+4. Review the generated Excel outputs under `results/`.
+5. Run analysis scripts to generate comparison boxplots.
 
-Example commands:
+Run Greedy:
 
 ```bash
 python main.py --algorithm greedy
-python main.py --algorithm cluster_ga
-
-python revenue_rate_comparison.py
-python per_uav_revenue_share_comparisons.py
-python flight_time_left_comparison.py
 ```
+
+Run Cluster+GA:
+
+```bash
+python main.py --algorithm cluster_ga
+```
+
+The two algorithms run independently and save outputs in separate directories.
+
+## Generate comparison boxplots
+
+Run the analysis scripts from the project root:
+
+```bash
+python -m analysis.revenue_rate_comparison
+python -m analysis.per_uav_revenue_share_comparison
+python -m analysis.flight_time_left_comparison
+```
+
+## Helper Scripts
+
+Calculate revenue rates from saved tour outputs:
+
+```bash
+python -m scripts.calculate_revenue_rate
+```
+
+Create waypoint-to-UAV cluster-assignment workbooks from saved Cluster+GA sequences:
+
+```bash
+python -m scripts.assign_wp_to_cluster
+```
+
+Each assignment workbook contains one sheet per simulation run and uses the final stored tour. Each sheet has the following format:
+
+| Waypoint | UAV |
+|---:|---:|
+| 0 | 0 |
+| 1 | 1 |
+| 2 | 1 |
+| 3 | 2 |
+
+An empty `UAV` value indicates that the waypoint was not assigned in the final tour.

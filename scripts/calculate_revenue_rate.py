@@ -9,21 +9,13 @@ from src.environment import GridEnvironment
 from src.models import Waypoint
 
 
-# ============================================================
-# Paths
-# ============================================================
-
 RESULTS_DIR = Path("results/IRADA")
-WAYPOINTS_DIR = Path("waypoints")
+WAYPOINTS_DIR = Path("data/non_overlap_waypoints")
 
 GRID_SIZE = 13
 MIN_UAVS = 3
 MAX_UAVS = 10
 
-
-# ============================================================
-# Helpers
-# ============================================================
 
 def extract_num_uavs(excel_file: Path) -> int:
     """Extract UAV count from a filename such as UAVs3_GRID13_...xlsx."""
@@ -124,10 +116,6 @@ def create_environment(
     )
 
 
-# ============================================================
-# Revenue-rate calculation
-# ============================================================
-
 def calculate_sheet_revenue_rates(
     tour_dataframe: pd.DataFrame,
     waypoint_file: Path,
@@ -219,10 +207,6 @@ def calculate_sheet_revenue_rates(
     return pd.DataFrame(output_rows)
 
 
-# ============================================================
-# Process one Excel workbook
-# ============================================================
-
 def calculate_excel_file(
     tour_file: Path,
     waypoint_file: Path,
@@ -277,11 +261,6 @@ def calculate_excel_file(
 
     return revenue_sheets
 
-
-# ============================================================
-# Save result workbook
-# ============================================================
-
 def save_revenue_file(
     tour_file: Path,
     revenue_sheets: Dict[str, pd.DataFrame],
@@ -307,10 +286,6 @@ def save_revenue_file(
 
     return output_file
 
-
-# ============================================================
-# Main
-# ============================================================
 
 def main() -> None:
     (

@@ -1,6 +1,6 @@
 project:
   outputs_dir: results
-  waypoints_dir: waypoints
+  waypoints_dir: data/non_overlap_waypoints
   # waypoints_dir: aaaaaaaaa
 
 simulation:
