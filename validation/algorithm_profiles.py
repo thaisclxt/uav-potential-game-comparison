@@ -67,6 +67,6 @@ ALGORITHM_PROFILES = {
         results_dir=Path("results/overlap"),
         waypoints_dir=Path("data/overlap_waypoints"),
         round_column="negotiation_round",
-        m_j_mode="recalculate",
+        m_j_mode="stored",
     ),
 }

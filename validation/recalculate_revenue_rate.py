@@ -16,7 +16,7 @@ from validation.algorithm_profiles import (
 # Change this value to process another algorithm.
 # Available examples:
 # "IRADA", "greedy", "cluster_ga", "non_overlap", "overlap"
-ALGORITHM_NAME = "IRADA"
+ALGORITHM_NAME = "overlap"
 
 GRID_SIZE = 13
 MIN_UAVS = 3
@@ -118,31 +118,6 @@ def parse_sequence(
             f"Waypoint ID {exc.args[0]} is not present "
             "in the corresponding waypoint worksheet."
         ) from exc
-
-
-def remove_duplicate_waypoints_in_sequence(
-    sequence: List[Waypoint],
-) -> List[Waypoint]:
-    """
-    Keep only the first occurrence of each waypoint ID
-    within one UAV sequence.
-
-    Example:
-        [wp2, wp7, wp7] -> [wp2, wp7]
-
-    This does not remove waypoints shared across different UAVs.
-    """
-    seen_waypoint_ids = set()
-    cleaned_sequence: List[Waypoint] = []
-
-    for waypoint in sequence:
-        if waypoint.wid in seen_waypoint_ids:
-            continue
-
-        seen_waypoint_ids.add(waypoint.wid)
-        cleaned_sequence.append(waypoint)
-
-    return cleaned_sequence
 
 
 def create_environment(
@@ -257,43 +232,16 @@ def calculate_sheet_revenue_rates(
                 waypoint_by_id=waypoint_by_id,
             )
 
-            if profile.name == "overlap":
-                sequence = remove_duplicate_waypoints_in_sequence(sequence)
-
-            # stored_m_j = (
-            #     0
-            #     if pd.isna(m_j_value)
-            #     else int(m_j_value)
-            # )
-
-            # if profile.name == "overlap":
-            #     m_j = allocator._compute_m_j(sequence)
-            # else:
-            #     m_j = stored_m_j
-
             uav = allocator.uavs[uav_id]
             uav.sequence = sequence
-            # uav.m_j = m_j
 
             # Determine m_j according to the algorithm profile.
             if profile.m_j_mode == "one":
                 # IRADA: one depot-to-depot route.
                 uav.m_j = 1 if uav.sequence else 0
 
-            elif profile.m_j_mode == "recalculate":
-                # Overlap: route may have changed after duplicate removal.
-                uav.m_j = allocator._compute_m_j(
-                    uav.sequence
-                )
-
             else:
-                # Greedy, Cluster+GA, and Non-Overlap:
-                # use saved m_j from the sequence workbook.
-                uav.m_j = (
-                    0
-                    if m_j_value is None or pd.isna(m_j_value)
-                    else int(m_j_value)
-                )
+                uav.m_j = 0 if m_j_value is None or pd.isna(m_j_value) else int(m_j_value)
 
             revenue_row[f"UAV{uav_id}"] = (
                 allocator.compute_revenue_rate(uav)
