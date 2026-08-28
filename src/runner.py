@@ -1,9 +1,8 @@
 import random
 import time
-import pandas as pd
-
 from pathlib import Path
-from typing import List, Type
+from typing import List, Optional, Type
+import pandas as pd
 
 from .config import (
     ClusterGAConfig,
@@ -22,10 +21,9 @@ from .io_utils import (
 from .models import UAV
 from .utils import extract_grid_size, extract_num_uavs
 
-from algorithms.greedy import GreedyAllocator
-from algorithms.cluster_ga import ClusterGAAllocator
 from algorithms.base_allocator import BaseAllocator
-
+from algorithms.cluster_ga import ClusterGAAllocator
+from algorithms.greedy import GreedyAllocator
 
 ALLOCATORS = {
     "greedy": GreedyAllocator,
@@ -80,6 +78,7 @@ def _run_one_environment(
     uav_cfg: UAVConfig,
     cluster_cfg: ClusterGAConfig,
     random_state: int,
+    centroids_export_path: Optional[Path] = None,
 ) -> None:
     allocator_class: Type[BaseAllocator] = ALLOCATORS[algorithm_name]
 
@@ -96,15 +95,17 @@ def _run_one_environment(
         allocator_kwargs["crossover_probability"] = cluster_cfg.crossover_probability
         allocator_kwargs["mutation_probability"] = cluster_cfg.mutation_probability
         allocator_kwargs["random_state"] = random_state
+        allocator_kwargs["centroids_export_path"] = centroids_export_path
 
     allocator = allocator_class(**allocator_kwargs)
 
     # Start timing only after allocator construction.
     start_time = time.perf_counter()
 
-    uavs, _, total_revenue, total_revenue_rate = (
-        allocator.solve()
-    )
+    if algorithm_name == "cluster_ga":
+        uavs, _, total_revenue, total_revenue_rate = allocator.solve(run_name=run_label)
+    else:
+        uavs, _, total_revenue, total_revenue_rate = allocator.solve()
 
     elapsed_seconds = time.perf_counter() - start_time
 
@@ -122,7 +123,7 @@ def _run_one_environment(
         f"{source_label} | {run_label} | "
         f"total revenue = {total_revenue:.2f}, "
         f"total revenue rate = {total_revenue_rate:.2f}, "
-        f"runtime = {elapsed_seconds:.4f} "
+        f"runtime = {elapsed_seconds:.4f}s"
     )
 
 
@@ -147,8 +148,6 @@ def run_simulation(
     base_outputs_dir = Path(project_cfg.outputs_dir)
     algorithm_outputs_dir = base_outputs_dir / algorithm_name
 
-    base_outputs_dir = Path(project_cfg.outputs_dir)
-
     if sim_cfg.scenario == "excel":
         for wp_file in waypoint_files:
             try:
@@ -163,6 +162,15 @@ def run_simulation(
                 m=n_uavs,
                 grid_size=grid_size,
             )
+
+            # Create centroids directory and workbook path per UAV number
+            centroids_dir = algorithm_outputs_dir / f"UAVs{n_uavs}_GRID{grid_size}" / "centroids"
+            centroids_dir.mkdir(parents=True, exist_ok=True)
+            centroids_file = centroids_dir / f"centroids_UAV_{n_uavs}.xlsx"
+
+            # Remove old file if starting a fresh batch
+            if centroids_file.exists():
+                centroids_file.unlink()
 
             revenue_sheets: List[pd.DataFrame] = []
             tour_sheets: List[pd.DataFrame] = []
@@ -206,8 +214,9 @@ def run_simulation(
                     revenue_sheets=revenue_sheets,
                     tour_sheets=tour_sheets,
                     uav_cfg=uav_cfg,
-                    cluster_cfg=ClusterGAConfig,
+                    cluster_cfg=cluster_cfg,
                     random_state=sim_cfg.seed + sheet_idx,
+                    centroids_export_path=centroids_file,
                 )
 
             export_runs_to_excel(
@@ -232,6 +241,13 @@ def run_simulation(
             grid_size=grid_size,
         )
 
+        centroids_dir = algorithm_outputs_dir / f"UAVs{n_uavs}_GRID{grid_size}" / "centroids"
+        centroids_dir.mkdir(parents=True, exist_ok=True)
+        centroids_file = centroids_dir / f"centroids_UAV_{n_uavs}.xlsx"
+
+        if centroids_file.exists():
+            centroids_file.unlink()
+
         revenue_sheets: List[pd.DataFrame] = []
         tour_sheets: List[pd.DataFrame] = []
 
@@ -239,22 +255,6 @@ def run_simulation(
             f"\n=== Running {sim_cfg.scenario} simulation "
             f"(n_uavs={n_uavs}, grid={grid_size}x{grid_size}, runs={sim_cfg.number_runs}) ==="
         )
-
-        summary_env = GridEnvironment(
-            project_configuration=project_cfg,
-            simulation=sim_cfg,
-            target_waypoints=None,
-            width=grid_cfg.width,
-            height=grid_cfg.height,
-            spacing=grid_cfg.spacing,
-            depot_location=grid_cfg.depot_location,
-            wp_base_revenue=wp_cfg.base_revenue,
-            wp_min_revenue=wp_cfg.min_revenue,
-            wp_max_revenue=wp_cfg.max_revenue,
-            number_targets=wp_cfg.number_targets,
-            revenue_matrix=wp_cfg.revenue_matrix,
-        )
-        summary_env.print_static_summary()
 
         for run_idx in range(1, sim_cfg.number_runs + 1):
             random.seed(sim_cfg.seed + run_idx)
@@ -283,8 +283,9 @@ def run_simulation(
                 revenue_sheets=revenue_sheets,
                 tour_sheets=tour_sheets,
                 uav_cfg=uav_cfg,
-                cluster_cfg=ClusterGAConfig,
+                cluster_cfg=cluster_cfg,
                 random_state=sim_cfg.seed + run_idx,
+                centroids_export_path=centroids_file,
             )
 
         export_runs_to_excel(
@@ -304,9 +305,7 @@ def run_simulation(
             f"{algorithm_outputs_dir / f'UAVs{n_uavs}_GRID{grid_size}'}"
         )
 
-    full_simulation_elapsed = (
-        time.perf_counter() - full_simulation_start
-    )
+    full_simulation_elapsed = time.perf_counter() - full_simulation_start
 
     print(
         f"\n[RUNNER] Full {algorithm_name} simulation completed in "

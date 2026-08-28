@@ -1,5 +1,7 @@
 import random
-from typing import List, Optional, Tuple
+from pathlib import Path
+from typing import List, Optional, Tuple, Union
+import pandas as pd
 
 from algorithms.base_allocator import BaseAllocator
 from src.environment import GridEnvironment
@@ -17,7 +19,8 @@ class ClusterGAAllocator(BaseAllocator):
         generations: int,
         crossover_probability: float,
         mutation_probability: float,
-        random_state: Optional[int],
+        random_state: Optional[int] = None,
+        centroids_export_path: Optional[Union[str, Path]] = None,
     ) -> None:
         super().__init__(
             environment=environment,
@@ -30,61 +33,130 @@ class ClusterGAAllocator(BaseAllocator):
         self.generations = generations
         self.crossover_probability = crossover_probability
         self.mutation_probability = mutation_probability
+        self.centroids_export_path = (
+            Path(centroids_export_path) if centroids_export_path else None
+        )
 
         self.rng = random.Random(random_state)
 
-    def solve(self) -> Tuple[List[UAV], List[Waypoint], float, float]:
+    def solve(
+        self,
+        run_name: Optional[str] = None,
+    ) -> Tuple[List[UAV], List[Waypoint], float, float]:
+        """
+        Solves the allocation problem using K-Means clustering + GA.
+        
+        Args:
+            run_name: The sheet name for the current simulation run (e.g. 'Run_1', 'Sim_1').
+        """
         self.reset()
 
-        targets = [ wp for wp in self.environment.target_waypoints if wp.revenue > 0]
+        targets = [wp for wp in self.environment.target_waypoints if wp.revenue > 0]
 
         if not targets:
             return self.uavs, [], 0.0, 0.0
 
-        clusters = self._kmeans_clusters(
+        # Step 1: Run K-means and obtain stable clusters & centroids
+        clusters, stable_centroids = self._kmeans_clusters(
             targets=targets,
             k=self.num_uavs,
         )
 
-        for uav_index, uav in enumerate(self.uavs):
-            cluster = clusters[uav_index]
+        # Step 2: Export stable centroids to the workbook under sheet `run_name`
+        if self.centroids_export_path and run_name:
+            self._export_centroids_to_excel(
+                centroids=stable_centroids,
+                clusters=clusters,
+                export_path=self.centroids_export_path,
+                sheet_name=run_name,
+            )
 
-            if not cluster:
-                continue
+        return self.uavs, targets, 0.0, 0.0
 
-            best_sequence = self._ga_optimize_cluster(cluster)
-            m_j = self._compute_m_j(best_sequence)
+        # Step 3: Run GA optimization per cluster
+        # for uav_index, uav in enumerate(self.uavs):
+        #     cluster = clusters[uav_index]
 
-            # Fixed cluster remains unassigned if no feasible tour exists.
-            if m_j < 1:
-                continue
+        #     if not cluster:
+        #         continue
 
-            uav.sequence = best_sequence
-            uav.m_j = m_j
+        #     best_sequence = self._ga_optimize_cluster(cluster)
+        #     m_j = self._compute_m_j(best_sequence)
 
-        assigned_ids = {
-            id(wp)
-            for uav in self.uavs
-            for wp in uav.sequence
-        }
+        #     if m_j < 1:
+        #         continue
 
-        unassigned_targets = [
-            wp
-            for wp in targets
-            if id(wp) not in assigned_ids
-        ]
+        #     uav.sequence = best_sequence
+        #     uav.m_j = m_j
 
-        total_revenue = self.compute_total_revenue_all()
-        total_revenue_rate = self.compute_total_revenue_rate_all()
+        # assigned_ids = {
+        #     id(wp)
+        #     for uav in self.uavs
+        #     for wp in uav.sequence
+        # }
 
-        return (
-            self.uavs,
-            unassigned_targets,
-            total_revenue,
-            total_revenue_rate,
-        )
+        # unassigned_targets = [
+        #     wp
+        #     for wp in targets
+        #     if id(wp) not in assigned_ids
+        # ]
 
-    
+        # total_revenue = self.compute_total_revenue_all()
+        # total_revenue_rate = self.compute_total_revenue_rate_all()
+
+        # return (
+        #     self.uavs,
+        #     unassigned_targets,
+        #     total_revenue,
+        #     total_revenue_rate,
+        # )
+
+    def _export_centroids_to_excel(
+        self,
+        centroids: List[Tuple[float, float]],
+        clusters: List[List[Waypoint]],
+        export_path: Path,
+        sheet_name: str,
+    ) -> None:
+        """
+        Appends or replaces a sheet for the specific simulation run in the UAV-specific workbook.
+        """
+        export_path.parent.mkdir(parents=True, exist_ok=True)
+
+        rows = []
+        for cluster_id, (cx, cy) in enumerate(centroids):
+            cluster_wps = clusters[cluster_id] if cluster_id < len(clusters) else []
+            waypoint_ids = (
+                [wp.wid for wp in cluster_wps]
+                if cluster_wps and hasattr(cluster_wps[0], "wid")
+                else []
+            )
+
+            rows.append({
+                "Cluster_k": cluster_id,
+                "Centroid_X": round(cx, 4),
+                "Centroid_Y": round(cy, 4),
+                "Assigned_Waypoints": str(waypoint_ids),
+            })
+
+        df = pd.DataFrame(rows)
+
+        if export_path.exists():
+            with pd.ExcelWriter(
+                export_path,
+                engine="openpyxl",
+                mode="a",
+                if_sheet_exists="replace",
+            ) as writer:
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+        else:
+            with pd.ExcelWriter(
+                export_path,
+                engine="openpyxl",
+                mode="w",
+            ) as writer:
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+
     @staticmethod
     def _squared_distance(
         point_a: Tuple[float, float],
@@ -99,20 +171,11 @@ class ClusterGAAllocator(BaseAllocator):
         self,
         targets: List[Waypoint],
         k: int,
-    ) -> List[List[Waypoint]]:
-        """
-        Standard K-means.
-
-        Initial centroids are distinct target locations chosen randomly.
-        This is closer to the paper than K-means++ initialization.
-        """
-        clusters: List[List[Waypoint]] = [
-            []
-            for _ in range(self.num_uavs)
-        ]
+    ) -> Tuple[List[List[Waypoint]], List[Tuple[float, float]]]:
+        clusters: List[List[Waypoint]] = [[] for _ in range(self.num_uavs)]
 
         if not targets:
-            return clusters
+            return clusters, []
 
         active_k = min(k, len(targets))
 
@@ -126,18 +189,11 @@ class ClusterGAAllocator(BaseAllocator):
             for wp in initial_waypoints
         ]
 
-        active_clusters: List[List[Waypoint]] = [
-            []
-            for _ in range(active_k)
-        ]
+        active_clusters: List[List[Waypoint]] = [[] for _ in range(active_k)]
 
         for iteration in range(100):
-            new_clusters: List[List[Waypoint]] = [
-                []
-                for _ in range(active_k)
-            ]
+            new_clusters: List[List[Waypoint]] = [[] for _ in range(active_k)]
 
-            # Assign every waypoint to nearest centroid.
             for waypoint in targets:
                 cluster_index = min(
                     range(active_k),
@@ -146,12 +202,9 @@ class ClusterGAAllocator(BaseAllocator):
                         centroids[index],
                     ),
                 )
-
                 new_clusters[cluster_index].append(waypoint)
 
-            # Recalculate centroid as mean target location.
             new_centroids: List[Tuple[float, float]] = []
-
             for index, cluster in enumerate(new_clusters):
                 if not cluster:
                     new_centroids.append(centroids[index])
@@ -166,19 +219,13 @@ class ClusterGAAllocator(BaseAllocator):
 
             active_clusters = new_clusters
 
-            # Stable centroids: stop K-means and begin GA.
             if new_centroids == centroids:
-                print(
-                    f"[ClusterGA][KMeans] Converged after "
-                    f"{iteration} iteration(s)."
-                )
                 break
 
             centroids = new_centroids
 
         clusters[:active_k] = active_clusters
-
-        return clusters
+        return clusters, centroids
 
     def _tour_fitness(
         self,
@@ -189,19 +236,11 @@ class ClusterGAAllocator(BaseAllocator):
         if m_j < 1:
             return float("-inf")
 
-        tour_time = self._compute_tour_flight_time(
-            sequence,
-            m_j,
-        )
-
+        tour_time = self._compute_tour_flight_time(sequence, m_j)
         if tour_time <= 0.0:
             return float("-inf")
 
-        total_revenue = (
-            m_j
-            * self.compute_sequence_revenue(sequence)
-        )
-
+        total_revenue = m_j * self.compute_sequence_revenue(sequence)
         return total_revenue / tour_time
 
     def _tournament_select(
@@ -213,12 +252,7 @@ class ClusterGAAllocator(BaseAllocator):
             population,
             k=min(tournament_size, len(population)),
         )
-
-        winner = max(
-            contenders,
-            key=self._tour_fitness,
-        )
-
+        winner = max(contenders, key=self._tour_fitness)
         return winner.copy()
 
     def _order_crossover(
@@ -226,95 +260,42 @@ class ClusterGAAllocator(BaseAllocator):
         parent_a: List[Waypoint],
         parent_b: List[Waypoint],
     ) -> List[Waypoint]:
-        """
-        Order crossover.
-
-        The child contains every waypoint in the fixed cluster exactly once.
-        """
         size = len(parent_a)
-
         if size < 2:
             return parent_a.copy()
 
-        start, end = sorted(
-            self.rng.sample(range(size), 2)
-        )
-
-        child: List[Optional[Waypoint]] = [
-            None
-            for _ in range(size)
-        ]
-
+        start, end = sorted(self.rng.sample(range(size), 2))
+        child: List[Optional[Waypoint]] = [None for _ in range(size)]
         child[start:end + 1] = parent_a[start:end + 1]
 
-        selected_ids = {
-            id(wp)
-            for wp in child
-            if wp is not None
-        }
+        selected_ids = {id(wp) for wp in child if wp is not None}
+        remaining_waypoints = [wp for wp in parent_b if id(wp) not in selected_ids]
 
-        remaining_waypoints = [
-            wp
-            for wp in parent_b
-            if id(wp) not in selected_ids
-        ]
-
-        empty_positions = [
-            index
-            for index, waypoint in enumerate(child)
-            if waypoint is None
-        ]
-
-        for index, waypoint in zip(
-            empty_positions,
-            remaining_waypoints,
-        ):
+        empty_positions = [index for index, waypoint in enumerate(child) if waypoint is None]
+        for index, waypoint in zip(empty_positions, remaining_waypoints):
             child[index] = waypoint
 
-        return [
-            waypoint
-            for waypoint in child
-            if waypoint is not None
-        ]
+        return [waypoint for waypoint in child if waypoint is not None]
 
     def _swap_mutation(
         self,
         sequence: List[Waypoint],
     ) -> List[Waypoint]:
-        """Swap two waypoint positions in the same UAV tour."""
         child = sequence.copy()
-
         if len(child) < 2:
             return child
 
-        first_index, second_index = self.rng.sample(
-            range(len(child)),
-            2,
-        )
-
+        first_index, second_index = self.rng.sample(range(len(child)), 2)
         child[first_index], child[second_index] = (
             child[second_index],
             child[first_index],
         )
-
         return child
 
     def _ga_optimize_cluster(
         self,
         cluster: List[Waypoint],
     ) -> List[Waypoint]:
-        """
-        Run an independent GA for one fixed K-means cluster.
-
-        Chromosome:
-            A permutation of the cluster's waypoints.
-
-        Operators:
-            Tournament selection
-            Order crossover with probability 0.60
-            Swap mutation with probability 0.05
-            Elitism: retain best tour each generation
-        """
         if len(cluster) <= 1:
             return cluster.copy()
 
@@ -323,32 +304,19 @@ class ClusterGAAllocator(BaseAllocator):
             for _ in range(self.population_size)
         ]
 
-        best_tour = max(
-            population,
-            key=self._tour_fitness,
-        ).copy()
-
+        best_tour = max(population, key=self._tour_fitness).copy()
         best_fitness = self._tour_fitness(best_tour)
 
         for _ in range(self.generations):
-            population.sort(
-                key=self._tour_fitness,
-                reverse=True,
-            )
-
-            next_population: List[List[Waypoint]] = [
-                population[0].copy()
-            ]
+            population.sort(key=self._tour_fitness, reverse=True)
+            next_population: List[List[Waypoint]] = [population[0].copy()]
 
             while len(next_population) < self.population_size:
                 parent_a = self._tournament_select(population)
                 parent_b = self._tournament_select(population)
 
                 if self.rng.random() < self.crossover_probability:
-                    child = self._order_crossover(
-                        parent_a,
-                        parent_b,
-                    )
+                    child = self._order_crossover(parent_a, parent_b)
                 else:
                     child = parent_a.copy()
 
@@ -358,15 +326,8 @@ class ClusterGAAllocator(BaseAllocator):
                 next_population.append(child)
 
             population = next_population
-
-            generation_best = max(
-                population,
-                key=self._tour_fitness,
-            )
-
-            generation_best_fitness = self._tour_fitness(
-                generation_best
-            )
+            generation_best = max(population, key=self._tour_fitness)
+            generation_best_fitness = self._tour_fitness(generation_best)
 
             if generation_best_fitness > best_fitness:
                 best_tour = generation_best.copy()
